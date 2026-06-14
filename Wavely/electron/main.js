@@ -1,0 +1,229 @@
+const { app, BrowserWindow, ipcMain, Menu } = require('electron')
+const path = require('path')
+const fs = require('fs')
+const initSqlJs = require('sql.js')
+
+const isDev = !app.isPackaged
+let db
+let dbPath
+
+// ---- DB helpers ----
+
+function saveDb() {
+  const data = db.export()
+  fs.writeFileSync(dbPath, Buffer.from(data))
+}
+
+function queryAll(sql, params) {
+  const stmt = db.prepare(sql)
+  if (params && params.length) stmt.bind(params)
+  const rows = []
+  while (stmt.step()) rows.push(stmt.getAsObject())
+  stmt.free()
+  return rows
+}
+
+function queryOne(sql, params) {
+  const stmt = db.prepare(sql)
+  if (params && params.length) stmt.bind(params)
+  let row = null
+  if (stmt.step()) row = stmt.getAsObject()
+  stmt.free()
+  return row
+}
+
+function execute(sql, params) {
+  db.run(sql, params || [])
+  saveDb()
+}
+
+function lastId() {
+  return db.exec('SELECT last_insert_rowid() as id')[0].values[0][0]
+}
+
+// ---- Database initialization ----
+
+async function initDatabase() {
+  const SQL = await initSqlJs()
+  dbPath = path.join(app.getPath('userData'), 'turbo.db')
+
+  if (fs.existsSync(dbPath)) {
+    db = new SQL.Database(fs.readFileSync(dbPath))
+  } else {
+    db = new SQL.Database()
+  }
+
+  db.run('PRAGMA foreign_keys = ON')
+
+  db.run(`CREATE TABLE IF NOT EXISTS projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    color TEXT DEFAULT '#6366f1',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`)
+
+  db.run(`CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    status TEXT DEFAULT 'todo',
+    priority TEXT DEFAULT 'medium',
+    start_date TEXT,
+    end_date TEXT,
+    progress INTEGER DEFAULT 0,
+    comment TEXT DEFAULT '',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`)
+  try { db.run(`ALTER TABLE tasks ADD COLUMN comment TEXT DEFAULT ''`) } catch(_) {}
+
+  const row = queryOne('SELECT COUNT(*) as count FROM projects')
+  if (!row || row.count === 0) {
+    db.run('INSERT INTO projects (name, description, color) VALUES (?, ?, ?)',
+      ['サンプルプロジェクト', 'デフォルトプロジェクト', '#6366f1'])
+    const projectId = lastId()
+
+    const today = new Date()
+    const relDate = (offset) => {
+      const d = new Date(today)
+      d.setDate(d.getDate() + offset)
+      return d.toISOString().split('T')[0]
+    }
+
+    const tasks = [
+      ['要件定義', 'done', 'high', relDate(-14), relDate(-8), 100],
+      ['設計', 'done', 'high', relDate(-7), relDate(-3), 100],
+      ['フロントエンド実装', 'in_progress', 'medium', relDate(-2), relDate(10), 40],
+      ['バックエンド実装', 'todo', 'medium', relDate(3), relDate(14), 0],
+      ['テスト', 'todo', 'low', relDate(15), relDate(20), 0],
+    ]
+
+    for (const [title, status, priority, start_date, end_date, progress] of tasks) {
+      db.run(
+        'INSERT INTO tasks (project_id, title, status, priority, start_date, end_date, progress) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [projectId, title, status, priority, start_date, end_date, progress]
+      )
+    }
+  }
+
+  saveDb()
+}
+
+// ---- IPC Handlers ----
+
+const TASK_SELECT = `
+  SELECT t.*, p.name as project_name, p.color as project_color
+  FROM tasks t
+  LEFT JOIN projects p ON t.project_id = p.id
+`
+
+function setupIpcHandlers() {
+  ipcMain.handle('get-projects', () =>
+    queryAll('SELECT * FROM projects ORDER BY created_at ASC')
+  )
+
+  ipcMain.handle('create-project', (_, { name, description, color }) => {
+    db.run('INSERT INTO projects (name, description, color) VALUES (?, ?, ?)',
+      [name, description || '', color || '#6366f1'])
+    const id = lastId()
+    saveDb()
+    return queryOne('SELECT * FROM projects WHERE id = ?', [id])
+  })
+
+  ipcMain.handle('update-project', (_, { id, name, description, color }) => {
+    execute('UPDATE projects SET name = ?, description = ?, color = ? WHERE id = ?',
+      [name, description || '', color, id])
+    return queryOne('SELECT * FROM projects WHERE id = ?', [id])
+  })
+
+  ipcMain.handle('delete-project', (_, id) => {
+    execute('DELETE FROM projects WHERE id = ?', [id])
+    return { success: true }
+  })
+
+  ipcMain.handle('get-tasks', (_, projectId) => {
+    const sql = TASK_SELECT +
+      (projectId ? 'WHERE t.project_id = ? ORDER BY t.created_at ASC' : 'ORDER BY t.created_at ASC')
+    return queryAll(sql, projectId ? [projectId] : [])
+  })
+
+  ipcMain.handle('create-task', (_, task) => {
+    db.run(`
+      INSERT INTO tasks (project_id, title, description, status, priority, start_date, end_date, progress, comment)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      task.project_id, task.title, task.description || '',
+      task.status || 'todo', task.priority || 'medium',
+      task.start_date || null, task.end_date || null, task.progress || 0,
+      task.comment || '',
+    ])
+    const id = lastId()
+    saveDb()
+    return queryOne(`${TASK_SELECT} WHERE t.id = ?`, [id])
+  })
+
+  ipcMain.handle('update-task', (_, task) => {
+    execute(`
+      UPDATE tasks SET
+        title = ?, description = ?, status = ?, priority = ?,
+        start_date = ?, end_date = ?, progress = ?, comment = ?, project_id = ?,
+        updated_at = datetime('now')
+      WHERE id = ?
+    `, [
+      task.title, task.description || '', task.status, task.priority,
+      task.start_date || null, task.end_date || null, task.progress || 0,
+      task.comment || '', task.project_id, task.id,
+    ])
+    return queryOne(`${TASK_SELECT} WHERE t.id = ?`, [task.id])
+  })
+
+  ipcMain.handle('delete-task', (_, id) => {
+    execute('DELETE FROM tasks WHERE id = ?', [id])
+    return { success: true }
+  })
+}
+
+// ---- Window ----
+
+function createWindow() {
+  const win = new BrowserWindow({
+    width: 1400,
+    height: 900,
+    minWidth: 960,
+    minHeight: 600,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+    show: false,
+  })
+
+  win.once('ready-to-show', () => win.show())
+
+  if (isDev) {
+    win.loadURL('http://localhost:5173')
+  } else {
+    win.loadFile(path.join(__dirname, '../dist/index.html'))
+  }
+}
+
+// ---- App lifecycle ----
+
+app.whenReady().then(async () => {
+  Menu.setApplicationMenu(null)
+  await initDatabase()
+  setupIpcHandlers()
+  createWindow()
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  })
+})
+
+app.on('window-all-closed', () => {
+  if (db) db.close()
+  if (process.platform !== 'darwin') app.quit()
+})
