@@ -1,0 +1,231 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --nm-bg: #e0e5ec;
+  --nm-dark: #a3b1c6;
+  --nm-light: #ffffff;
+  --nm-text: #4a5568;
+  --nm-muted: #8892a4;
+  --nm-accent: #4338ca;
+}
+
+[data-theme="dark"] {
+  --nm-bg: #2a2d3e;
+  --nm-dark: #1d2030;
+  --nm-light: #373b52;
+  --nm-text: #dce3f0;
+  --nm-muted: #7a849a;
+  --nm-accent: #6366f1;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--nm-bg);
+  color: var(--nm-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Hiragino Sans', 'Yu Gothic UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--nm-dark); border-radius: 2px; }
+
+/* ── Neumorphism utilities ── */
+
+.nm-raised {
+  background: var(--nm-bg);
+  box-shadow: 8px 8px 16px var(--nm-dark), -8px -8px 16px var(--nm-light);
+  border-radius: 8px;
+}
+.nm-raised-sm {
+  background: var(--nm-bg);
+  box-shadow: 5px 5px 10px var(--nm-dark), -5px -5px 10px var(--nm-light);
+  border-radius: 8px;
+}
+.nm-raised-xs {
+  background: var(--nm-bg);
+  box-shadow: 3px 3px 6px var(--nm-dark), -3px -3px 6px var(--nm-light);
+  border-radius: 8px;
+}
+.nm-pressed {
+  background: var(--nm-bg);
+  box-shadow: inset 5px 5px 10px var(--nm-dark), inset -5px -5px 10px var(--nm-light);
+  border-radius: 8px;
+}
+.nm-pressed-sm {
+  background: var(--nm-bg);
+  box-shadow: inset 3px 3px 6px var(--nm-dark), inset -3px -3px 6px var(--nm-light);
+  border-radius: 8px;
+}
+.nm-pressed-xs {
+  background: var(--nm-bg);
+  box-shadow: inset 2px 2px 4px var(--nm-dark), inset -2px -2px 4px var(--nm-light);
+  border-radius: 8px;
+}
+
+/* Sidebar */
+.nm-sidebar {
+  background: var(--nm-bg);
+  box-shadow: 6px 0 20px var(--nm-dark), -2px 0 8px var(--nm-light);
+}
+
+/* Nav item active */
+.nm-nav-active {
+  box-shadow: inset 4px 4px 8px var(--nm-dark), inset -4px -4px 8px var(--nm-light);
+  border-radius: 8px;
+}
+
+/* Buttons */
+.nm-btn {
+  background: var(--nm-bg);
+  box-shadow: 4px 4px 8px var(--nm-dark), -4px -4px 8px var(--nm-light);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: box-shadow 0.15s ease;
+  color: var(--nm-text);
+}
+.nm-btn:hover {
+  box-shadow: 6px 6px 12px var(--nm-dark), -6px -6px 12px var(--nm-light);
+}
+.nm-btn:active {
+  box-shadow: inset 3px 3px 6px var(--nm-dark), inset -3px -3px 6px var(--nm-light);
+}
+
+.nm-btn-primary {
+  background: var(--nm-bg);
+  box-shadow: 4px 4px 8px var(--nm-dark), -4px -4px 8px var(--nm-light);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: box-shadow 0.15s ease;
+  color: var(--nm-accent);
+  font-weight: 600;
+}
+.nm-btn-primary:hover {
+  box-shadow: 6px 6px 12px var(--nm-dark), -6px -6px 12px var(--nm-light);
+}
+.nm-btn-primary:active {
+  box-shadow: inset 3px 3px 6px var(--nm-dark), inset -3px -3px 6px var(--nm-light);
+}
+
+.nm-btn-danger {
+  background: linear-gradient(145deg, #f47474, #e75c5c);
+  box-shadow: 4px 4px 8px var(--nm-dark), -3px -3px 6px var(--nm-light);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  color: white;
+  font-weight: 500;
+  transition: box-shadow 0.15s ease, filter 0.15s ease;
+}
+.nm-btn-danger:hover { filter: brightness(1.08); }
+
+/* Inputs */
+.nm-input {
+  background: var(--nm-bg);
+  box-shadow: inset 4px 4px 8px var(--nm-dark), inset -4px -4px 8px var(--nm-light);
+  border: none;
+  border-radius: 8px;
+  color: var(--nm-text);
+  outline: none;
+  width: 100%;
+  transition: box-shadow 0.2s ease;
+}
+.nm-input::placeholder { color: var(--nm-muted); }
+.nm-input:focus {
+  box-shadow: inset 4px 4px 8px var(--nm-dark), inset -4px -4px 8px var(--nm-light),
+              0 0 0 2px rgba(99, 102, 241, 0.35);
+}
+
+/* Select */
+.nm-select {
+  background: var(--nm-bg);
+  box-shadow: inset 4px 4px 8px var(--nm-dark), inset -4px -4px 8px var(--nm-light);
+  border: none;
+  border-radius: 8px;
+  color: var(--nm-text);
+  outline: none;
+  width: 100%;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%238892a4'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 16px;
+}
+.nm-select:focus {
+  box-shadow: inset 4px 4px 8px var(--nm-dark), inset -4px -4px 8px var(--nm-light),
+              0 0 0 2px rgba(99, 102, 241, 0.35);
+}
+
+/* Range */
+input[type="range"] {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--nm-accent) var(--progress, 0%),
+    var(--nm-bg)     var(--progress, 0%)
+  );
+  box-shadow: inset 2px 2px 5px var(--nm-dark), inset -2px -2px 5px var(--nm-light);
+  outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--nm-bg);
+  box-shadow: 3px 3px 6px var(--nm-dark), -3px -3px 6px var(--nm-light);
+  cursor: pointer;
+  transition: box-shadow 0.15s ease;
+}
+input[type="range"]::-webkit-slider-thumb:active {
+  box-shadow: inset 2px 2px 4px var(--nm-dark), inset -2px -2px 4px var(--nm-light);
+}
+
+/* Date input */
+input[type="date"]::-webkit-calendar-picker-indicator {
+  opacity: 0.5;
+  cursor: pointer;
+}
+
+/* Drawer */
+.nm-drawer-panel {
+  background: var(--nm-bg);
+  box-shadow: 10px 0 40px var(--nm-dark), 2px 0 12px var(--nm-light);
+}
+
+@keyframes slideInLeft {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(0); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.drawer-enter {
+  animation: slideInLeft 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.drawer-backdrop {
+  animation: fadeIn 0.2s ease forwards;
+}
+
+@keyframes cardExpand {
+  from { transform: scaleY(0); opacity: 0; }
+  to   { transform: scaleY(1); opacity: 1; }
+}
+
+.card-expand {
+  transform-origin: top center;
+  animation: cardExpand 0.22s cubic-bezier(0.33, 0, 0.66, 1) forwards;
+}
