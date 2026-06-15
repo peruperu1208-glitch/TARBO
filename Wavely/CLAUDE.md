@@ -48,10 +48,14 @@ Renderer (Vite + React)
 
 #### tasks テーブル主要カラム
 
-`id, project_id, title, description, status, priority, start_date, end_date, progress, comment`
+`id, project_id, parent_id, title, description, status, priority, start_date, end_date, progress, comment`
 
 - `status`: `'todo'` | `'in_progress'` | `'done'`（進捗率から自動設定: 0%=todo, 1-99%=in_progress, 100%=done）
 - `priority`: `'low'` | `'medium'` | `'high'`
+- `parent_id`: NULL = メインタスク、数値 = サブタスク（自己参照 FK）
+- `App.jsx` が `rootTasks = tasks.filter(t => !t.parent_id)` をビューに渡す。`allTasks` も別途渡す
+- サブタスクの開始日・終了日変更時、`handleUpdateTask` / `handleSubtaskCreate` で親タスクの日付を自動調整
+- 全サブタスクが done になった時点で親タスクも `done` / `progress: 100` に自動更新
 
 ### IPC フロー
 
@@ -87,7 +91,9 @@ Renderer (Vite + React)
 
 ### ニューモーフィズムクラス（`src/index.css`）
 
-CSS 変数 `--nm-bg / --nm-dark / --nm-light / --nm-text / --nm-muted / --nm-accent` をベースにした独自クラスを使う。インライン `box-shadow` の直書きは最小限にする。
+CSS 変数 `--nm-bg / --nm-dark / --nm-light / --nm-text / --nm-muted / --nm-accent / --nm-line` をベースにした独自クラスを使う。インライン `box-shadow` の直書きは最小限にする。
+
+- `--nm-line`: グリッド罫線色（ライト: `rgba(100,116,139,0.28)`、ダーク: `rgba(163,177,198,0.22)`）
 
 | クラス | 用途 |
 |---|---|
@@ -128,8 +134,14 @@ CSS 変数 `--nm-bg / --nm-dark / --nm-light / --nm-text / --nm-muted / --nm-acc
 - ドラッグ処理（タスクバー移動・リサイズ・列幅変更）は単一の `useEffect([], [])` で管理。クロージャー内で可変値を参照するため `cw`・`scale`・`viewStart`・`viewEnd` 等は必ず Ref で同期する
 - `groupByProject=true`（全タスク表示時）は `projectGroups` useMemo でプロジェクト別ブロックに分割
   - ブロック背景: `${project.color}18`（約10%不透明度）
-  - **折りたたみ**: `collapsedProjects`（Set）で管理。折りたたみ時はヘッダー行のみ表示し、グリッド側にプロジェクト全タスクの min(start_date)〜max(end_date) のサマリーバーを描画（`getProjectDateRange()` で算出）
+  - プロジェクトブロックの wrapper に `overflow: hidden` を付けると `position: sticky` が壊れるため削除済み
+  - **折りたたみ（プロジェクト）**: `collapsedProjects`（Set）で管理。折りたたみ時はヘッダー行のみ表示し、グリッド側にサマリーバーを描画（`getProjectDateRange()` で算出）
+  - **折りたたみ（タスク）**: `collapsedTaskIds`（Set）でサブタスク行の表示制御
+  - **全折りたたみ/全展開**: `renderDateHeader` の「タスク名」ヘッダーセル内の ▼/▶ ボタンが `isAllCollapsed` 状態で切り替わる
   - **全完了チェック**: `allDone` をブロック内で算出し、ラベル列右端に緑チェックを表示
+- **スティッキー列**: タスク名列は `position: sticky; left: 0; z-index: 15; background: var(--nm-bg)` で横スクロール時も固定。プロジェクトブロックのラベルは `backgroundColor + backgroundImage` の重ね合わせでプロジェクト色の透明ティントを再現
+- **当日列**: 縦線なし。当日セルの背景を `rgba(14,165,233,0.25)`（スカイブルー）で塗る
+- **バー透明度**: 完了バーは `opacity: 0.75`、それ以外は `opacity: 0.85` で統一
 - タスク行ラベル列の右端アイコン（タイトル span に `flex-1 min-w-0` を付与して右寄せ）:
   - `status === 'done'` → 緑チェック（`#10b981`）、タイトルに取り消し線・ミュート色
   - `end_date < todayStr && status !== 'done'` → アンバー丸!アイコン（`#f59e0b`）、タイトルもアンバー色
@@ -159,9 +171,12 @@ CSS 変数 `--nm-bg / --nm-dark / --nm-light / --nm-text / --nm-muted / --nm-acc
 - 各カラムが独立スクロール: 親に `height: '100%', minHeight: 0`、カード領域に `flex: 1, minHeight: 0`
 - **インライン編集**: `expandedId` state でクリックしたカードを展開。`card-expand` アニメーション（`scaleY(0)→(1)`、`transform-origin: top center`）+ アクセントアウトライン
 - **ドラッグ&ドロップ**: HTML5 DnD API。完了カラムへドロップ時は `progress: 100` を自動設定
-- コンパクトカードの右端アイコン（タイトル行、優先度バッジの右）:
-  - `status === 'done'` → 緑チェック、タイトルに取り消し線
-  - `isOverdue`（`end_date < todayStr && status !== 'done'`）→ アンバー丸!アイコン、タイトルもアンバー色
+- **表示対象はメインタスクのみ**（`rootTasks`）。サブタスクはカード内部にインライン表示
+- **KanbanCard** は `subtasks` 配列（`allTasks.filter(t => t.parent_id === task.id)`）を受け取り、カード下部にサブタスクリストを描画
+  - タイトル行: 完了/期限超過アイコン（左）→ タスク名（`flex-1`）→ プロジェクト名ラベル（右）
+  - フッター: 「サブタスク X/X」バッジ（`nm-pressed-xs`）または「サブタスクなし」テキスト（font-size 11）
+  - サブタスクリスト: `└` インデント、クリックで `onEdit(sub)` を呼び出す
+- タスクモーダルタイトル: メインタスク編集 = `'メインタスクを編集'`、サブタスク = `'サブタスクを編集'`（`task.parent_id` で分岐）
 
 ### Header.jsx
 

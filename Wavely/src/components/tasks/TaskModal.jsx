@@ -4,7 +4,7 @@ function toDateStr(date) {
   return date.toISOString().slice(0, 10)
 }
 
-export default function TaskModal({ task, projects, defaultProjectId, defaultStatus = 'todo', onSave, onDelete, onClose }) {
+export default function TaskModal({ task, tasks = [], projects, defaultProjectId, defaultStatus = 'todo', onSave, onDelete, onClose }) {
   const today = new Date()
   const weekLater = new Date(today)
   weekLater.setDate(today.getDate() + 7)
@@ -13,6 +13,7 @@ export default function TaskModal({ task, projects, defaultProjectId, defaultSta
     title: '',
     description: '',
     project_id: defaultProjectId || projects[0]?.id || null,
+    parent_id: null,
     status: defaultStatus,
     priority: 'medium',
     start_date: toDateStr(today),
@@ -26,6 +27,7 @@ export default function TaskModal({ task, projects, defaultProjectId, defaultSta
     if (task) {
       setForm({
         ...task,
+        parent_id: task.parent_id || null,
         start_date: task.start_date || '',
         end_date: task.end_date || '',
         progress: task.progress || 0,
@@ -88,7 +90,7 @@ export default function TaskModal({ task, projects, defaultProjectId, defaultSta
               </svg>
             </div>
             <h2 className="text-base font-bold" style={{ color: 'var(--nm-text)' }}>
-              {task ? 'タスクを編集' : '新規タスク'}
+              {task ? (task.parent_id ? 'サブタスクを編集' : 'メインタスクを編集') : '新規タスク'}
             </h2>
           </div>
           <button
@@ -151,6 +153,28 @@ export default function TaskModal({ task, projects, defaultProjectId, defaultSta
               ))}
             </select>
           </div>
+
+          {/* 親タスク */}
+          {tasks.length > 0 && (
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--nm-muted)' }}>
+                親タスク
+              </label>
+              <select
+                value={form.parent_id || ''}
+                onChange={(e) => setForm(f => ({ ...f, parent_id: e.target.value ? Number(e.target.value) : null }))}
+                className="nm-select px-4 py-2.5 text-sm"
+              >
+                <option value="">なし（メインタスク）</option>
+                {tasks
+                  .filter(t => t.id !== task?.id)
+                  .map(t => (
+                    <option key={t.id} value={t.id}>{t.title}</option>
+                  ))
+                }
+              </select>
+            </div>
+          )}
 
           {/* 優先度 */}
           <div>
@@ -221,6 +245,7 @@ export default function TaskModal({ task, projects, defaultProjectId, defaultSta
               className="nm-input px-4 py-2.5 text-sm resize-none"
             />
           </div>
+
         </form>
 
         {/* フッター */}

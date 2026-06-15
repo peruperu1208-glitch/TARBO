@@ -78,6 +78,7 @@ async function initDatabase() {
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`)
   try { db.run(`ALTER TABLE tasks ADD COLUMN comment TEXT DEFAULT ''`) } catch(_) {}
+  try { db.run(`ALTER TABLE tasks ADD COLUMN parent_id INTEGER`) } catch(_) {}
 
   const row = queryOne('SELECT COUNT(*) as count FROM projects')
   if (!row || row.count === 0) {
@@ -151,13 +152,13 @@ function setupIpcHandlers() {
 
   ipcMain.handle('create-task', (_, task) => {
     db.run(`
-      INSERT INTO tasks (project_id, title, description, status, priority, start_date, end_date, progress, comment)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tasks (project_id, title, description, status, priority, start_date, end_date, progress, comment, parent_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       task.project_id, task.title, task.description || '',
       task.status || 'todo', task.priority || 'medium',
       task.start_date || null, task.end_date || null, task.progress || 0,
-      task.comment || '',
+      task.comment || '', task.parent_id || null,
     ])
     const id = lastId()
     saveDb()
@@ -169,12 +170,13 @@ function setupIpcHandlers() {
       UPDATE tasks SET
         title = ?, description = ?, status = ?, priority = ?,
         start_date = ?, end_date = ?, progress = ?, comment = ?, project_id = ?,
+        parent_id = ?,
         updated_at = datetime('now')
       WHERE id = ?
     `, [
       task.title, task.description || '', task.status, task.priority,
       task.start_date || null, task.end_date || null, task.progress || 0,
-      task.comment || '', task.project_id, task.id,
+      task.comment || '', task.project_id, task.parent_id || null, task.id,
     ])
     return queryOne(`${TASK_SELECT} WHERE t.id = ?`, [task.id])
   })

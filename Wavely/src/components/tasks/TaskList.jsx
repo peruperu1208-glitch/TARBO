@@ -18,9 +18,14 @@ const PRIORITY_OPTIONS = [
 
 const progressToStatus = (p) => p === 0 ? 'todo' : p === 100 ? 'done' : 'in_progress'
 
-function KanbanCard({ task, projects, isExpanded, onExpand, onCollapse, onSave, onDelete, onStatusChange, onDragStart, onDragEnd, isDragging }) {
+function KanbanCard({ task, projects, subtasks, isExpanded, onExpand, onCollapse, onSave, onDelete, onStatusChange, onEdit, onSubtaskCreate, onDragStart, onDragEnd, isDragging }) {
+  const subtaskCount = subtasks.length
+  const doneSubtaskCount = subtasks.filter(s => s.status === 'done').length
   const [form, setForm] = useState({})
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [addingSubtask, setAddingSubtask] = useState(false)
+  const [subtaskTitle, setSubtaskTitle] = useState('')
+  const [subtaskDates, setSubtaskDates] = useState({ start: '', end: '' })
 
   useEffect(() => {
     if (isExpanded) {
@@ -59,7 +64,7 @@ function KanbanCard({ task, projects, isExpanded, onExpand, onCollapse, onSave, 
   if (!isExpanded) {
     return (
       <div
-        className="nm-raised-sm p-3.5 cursor-pointer"
+        className="nm-raised-sm cursor-pointer"
         draggable
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
@@ -69,22 +74,10 @@ function KanbanCard({ task, projects, isExpanded, onExpand, onCollapse, onSave, 
         }}
         onMouseEnter={e => { if (!isDragging) { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '7px 7px 14px var(--nm-dark), -7px -7px 14px var(--nm-light)' } }}
         onMouseLeave={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = '' }}
-        onClick={onExpand}
       >
-        {/* タイトル + 優先度 */}
+      <div className="p-3.5" onClick={onExpand}>
+        {/* 完了/期限アイコン + タイトル + プロジェクト名 */}
         <div className="flex items-start gap-2 mb-2">
-          <p
-            className={`text-sm font-medium leading-snug flex-1 min-w-0 ${task.status === 'done' ? 'line-through' : ''}`}
-            style={{ color: task.status === 'done' ? 'var(--nm-muted)' : isOverdue ? '#f59e0b' : 'var(--nm-text)' }}
-          >
-            {task.title}
-          </p>
-          <span
-            className="nm-pressed-xs flex-shrink-0 font-bold"
-            style={{ color: PRIORITY_COLOR[task.priority], fontSize: 10, padding: '2px 6px' }}
-          >
-            {PRIORITY_LABEL[task.priority]}
-          </span>
           {task.status === 'done' && (
             <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="#10b981" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
@@ -94,6 +87,18 @@ function KanbanCard({ task, projects, isExpanded, onExpand, onCollapse, onSave, 
             <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="#f59e0b" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
+          )}
+          <p
+            className={`text-sm font-medium leading-snug flex-1 min-w-0 ${task.status === 'done' ? 'line-through' : ''}`}
+            style={{ color: task.status === 'done' ? 'var(--nm-muted)' : isOverdue ? '#f59e0b' : 'var(--nm-text)' }}
+          >
+            {task.title}
+          </p>
+          {task.project_name && (
+            <span className="flex items-center gap-1 flex-shrink-0" style={{ fontSize: 12, color: 'var(--nm-muted)' }}>
+              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: task.project_color }} />
+              {task.project_name}
+            </span>
           )}
         </div>
 
@@ -124,17 +129,53 @@ function KanbanCard({ task, projects, isExpanded, onExpand, onCollapse, onSave, 
 
         {/* フッター */}
         <div className="flex items-center gap-2">
-          {task.project_name && (
-            <span className="flex items-center gap-1 min-w-0" style={{ fontSize: 11, color: 'var(--nm-muted)' }}>
-              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: task.project_color }} />
-              <span className="truncate" style={{ maxWidth: 72 }}>{task.project_name}</span>
+          {subtaskCount > 0 ? (
+            <span
+              className="nm-pressed-xs flex-shrink-0"
+              style={{ fontSize: 11, color: doneSubtaskCount === subtaskCount ? '#10b981' : 'var(--nm-muted)', padding: '2px 6px' }}
+            >
+              サブタスク {doneSubtaskCount}/{subtaskCount}
             </span>
+          ) : (
+            <span style={{ fontSize: 11, color: 'var(--nm-muted)', opacity: 0.6 }}>サブタスクなし</span>
           )}
           <div className="flex items-center gap-1.5 ml-auto">
             {task.end_date && (
               <span style={{ fontSize: 11, color: 'var(--nm-muted)' }}>
                 〜{task.end_date.slice(5).replace('-', '/')}
               </span>
+            )}
+            {onEdit && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onEdit(task) }}
+                className="nm-btn flex items-center justify-center flex-shrink-0"
+                style={{ width: 22, height: 22, padding: 0 }}
+                title="詳細を開く"
+              >
+                <svg className="w-3 h-3" style={{ color: 'var(--nm-muted)' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                </svg>
+              </button>
+            )}
+            {onSubtaskCreate && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  const t = new Date()
+                  const todayStr = t.toISOString().slice(0, 10)
+                  const threeStr = new Date(t.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+                  setSubtaskDates({ start: todayStr, end: threeStr })
+                  setAddingSubtask(true)
+                  setSubtaskTitle('')
+                }}
+                className="nm-btn flex items-center justify-center flex-shrink-0"
+                style={{ width: 22, height: 22, padding: 0 }}
+                title="サブタスクを追加"
+              >
+                <svg className="w-3 h-3" style={{ color: 'var(--nm-muted)' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+                </svg>
+              </button>
             )}
             <button
               onClick={(e) => { e.stopPropagation(); onStatusChange(task, NEXT_STATUS[task.status]) }}
@@ -149,6 +190,82 @@ function KanbanCard({ task, projects, isExpanded, onExpand, onCollapse, onSave, 
           </div>
         </div>
       </div>
+      {subtasks.length > 0 && (
+        <div style={{ borderTop: '1px solid rgba(163,177,198,0.2)', paddingTop: 6, paddingBottom: 8, paddingLeft: 24, paddingRight: 14 }}>
+          {subtasks.map(sub => {
+            const subOverdue = sub.end_date && sub.status !== 'done' && sub.end_date < new Date().toISOString().slice(0, 10)
+            return (
+              <div key={sub.id} className="flex items-center gap-1.5" style={{ padding: '4px 0' }} onClick={e => { e.stopPropagation(); onEdit && onEdit(sub) }}>
+                <span style={{ color: 'var(--nm-muted)', fontSize: 11, flexShrink: 0 }}>└</span>
+                <span
+                  className="flex-1 truncate"
+                  style={{
+                    fontSize: 12,
+                    cursor: 'pointer',
+                    color: sub.status === 'done' ? 'var(--nm-muted)' : subOverdue ? '#f59e0b' : 'var(--nm-text)',
+                    textDecoration: sub.status === 'done' ? 'line-through' : 'none',
+                  }}
+                >
+                  {sub.title}
+                </span>
+                {sub.end_date && sub.status !== 'done' && (
+                  <span style={{ fontSize: 11, color: subOverdue ? '#f59e0b' : 'var(--nm-muted)', flexShrink: 0 }}>
+                    {sub.end_date.slice(5).replace('-', '/')}
+                  </span>
+                )}
+                <span style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: STATUS_COLOR[sub.status], flexShrink: 0 }} />
+              </div>
+            )
+          })}
+        </div>
+      )}
+      {addingSubtask && (
+        <div className="px-3 pb-3" onClick={e => e.stopPropagation()}>
+          <div className="flex gap-1.5 items-center mb-1.5">
+            <span style={{ fontSize: 10, color: 'var(--nm-muted)', flexShrink: 0 }}>└</span>
+            <input
+              autoFocus
+              value={subtaskTitle}
+              onChange={e => setSubtaskTitle(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && subtaskTitle.trim()) {
+                  onSubtaskCreate(task.id, subtaskTitle.trim(), subtaskDates.start || null, subtaskDates.end || null)
+                  setSubtaskTitle(''); setSubtaskDates({ start: '', end: '' }); setAddingSubtask(false)
+                }
+                if (e.key === 'Escape') { setAddingSubtask(false); setSubtaskTitle(''); setSubtaskDates({ start: '', end: '' }) }
+              }}
+              placeholder="サブタスク名を入力..."
+              className="nm-input px-2 py-1 flex-1"
+              style={{ borderRadius: 6, fontSize: 13 }}
+            />
+          </div>
+          <div className="flex items-center gap-1" style={{ paddingLeft: 14 }}>
+            <input
+              type="date"
+              value={subtaskDates.start}
+              onChange={e => setSubtaskDates(d => ({ ...d, start: e.target.value }))}
+              className="nm-input px-1 py-1 flex-1"
+              style={{ borderRadius: 6, fontSize: 13 }}
+            />
+            <span className="flex-shrink-0" style={{ fontSize: 12, color: 'var(--nm-muted)' }}>〜</span>
+            <input
+              type="date"
+              value={subtaskDates.end}
+              onChange={e => setSubtaskDates(d => ({ ...d, end: e.target.value }))}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && subtaskTitle.trim()) {
+                  onSubtaskCreate(task.id, subtaskTitle.trim(), subtaskDates.start || null, subtaskDates.end || null)
+                  setSubtaskTitle(''); setSubtaskDates({ start: '', end: '' }); setAddingSubtask(false)
+                }
+                if (e.key === 'Escape') { setAddingSubtask(false); setSubtaskTitle(''); setSubtaskDates({ start: '', end: '' }) }
+              }}
+              className="nm-input px-1 py-1 flex-1"
+              style={{ borderRadius: 6, fontSize: 13 }}
+            />
+          </div>
+        </div>
+      )}
+    </div>
     )
   }
 
@@ -297,7 +414,7 @@ function KanbanCard({ task, projects, isExpanded, onExpand, onCollapse, onSave, 
   )
 }
 
-export default function TaskList({ tasks, projects, onSave, onDelete, onStatusChange, onNewTask }) {
+export default function TaskList({ tasks, allTasks = [], projects, onSave, onDelete, onStatusChange, onNewTask, onEdit, onSubtaskCreate }) {
   const [expandedId, setExpandedId] = useState(null)
   const [draggedTaskId, setDraggedTaskId] = useState(null)
   const [dragOverCol, setDragOverCol] = useState(null)
@@ -395,22 +512,28 @@ export default function TaskList({ tasks, projects, onSave, onDelete, onStatusCh
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {colTasks.map(task => (
-                    <KanbanCard
-                      key={task.id}
-                      task={task}
-                      projects={projects}
-                      isExpanded={expandedId === task.id}
-                      onExpand={() => setExpandedId(task.id)}
-                      onCollapse={() => setExpandedId(null)}
-                      onSave={onSave}
-                      onDelete={onDelete}
-                      onStatusChange={onStatusChange}
-                      isDragging={draggedTaskId === task.id}
-                      onDragStart={() => { setDraggedTaskId(task.id); setExpandedId(null) }}
-                      onDragEnd={() => { setDraggedTaskId(null); setDragOverCol(null) }}
-                    />
-                  ))}
+                  {colTasks.map(task => {
+                    const subs = allTasks.filter(t => t.parent_id === task.id)
+                    return (
+                      <KanbanCard
+                        key={task.id}
+                        task={task}
+                        projects={projects}
+                        subtasks={subs}
+                        isExpanded={expandedId === task.id}
+                        onExpand={() => setExpandedId(task.id)}
+                        onCollapse={() => setExpandedId(null)}
+                        onSave={onSave}
+                        onDelete={onDelete}
+                        onStatusChange={onStatusChange}
+                        onEdit={onEdit}
+                        onSubtaskCreate={onSubtaskCreate}
+                        isDragging={draggedTaskId === task.id}
+                        onDragStart={() => { setDraggedTaskId(task.id); setExpandedId(null) }}
+                        onDragEnd={() => { setDraggedTaskId(null); setDragOverCol(null) }}
+                      />
+                    )
+                  })}
                 </div>
               )}
             </div>

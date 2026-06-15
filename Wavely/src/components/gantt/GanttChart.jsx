@@ -16,7 +16,7 @@ const STATUS_COLOR = {
   done: '#10b981',
 }
 
-export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onNewTask, groupByProject = false }) {
+export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onDatesChange, onNewTask, onSubtaskCreate, groupByProject = false }) {
   const today = useMemo(() => new Date(), [])
 
   const [viewStart, setViewStart] = useState(() => {
@@ -32,7 +32,6 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
   const zoomUp   = () => { if (zoomIdx < ZOOM_LEVELS.length - 1) setZoom(ZOOM_LEVELS[zoomIdx + 1]) }
   const zoomReset = () => setZoom(100)
 
-  // ---- スケール計算 ----
   const scale = zoom / 100
   const cw  = Math.round(CELL_W  * scale)
   const rh  = Math.round(ROW_H   * scale)
@@ -62,7 +61,31 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
   const todayStr = format(today, 'yyyy-MM-dd')
   const todayIdx = days.findIndex(d => format(d, 'yyyy-MM-dd') === todayStr)
 
-  // ---- ドラッグ状態 ----
+  // サブタスクマップ
+  const subtaskMap = useMemo(() => {
+    const map = new Map()
+    allTasks.filter(t => t.parent_id).forEach(sub => {
+      if (!map.has(sub.parent_id)) map.set(sub.parent_id, [])
+      map.get(sub.parent_id).push(sub)
+    })
+    return map
+  }, [allTasks])
+
+  // インラインサブタスク追加状態
+  const [addingSubtaskId, setAddingSubtaskId] = useState(null)
+  const [newSubtaskTitle, setNewSubtaskTitle] = useState('')
+  const [newSubtaskDates, setNewSubtaskDates] = useState({ start: '', end: '' })
+  const [collapsedTaskIds, setCollapsedTaskIds] = useState(new Set())
+  const toggleTaskCollapse = (taskId) => {
+    setCollapsedTaskIds(prev => {
+      const next = new Set(prev)
+      if (next.has(taskId)) next.delete(taskId)
+      else next.add(taskId)
+      return next
+    })
+  }
+
+  // ドラッグ状態
   const dragInfo        = useRef(null)
   const didDragRef      = useRef(false)
   const viewStartRef    = useRef(viewStart)
@@ -81,14 +104,12 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
   useEffect(() => { cwRef.current           = cw           }, [cw])
   useEffect(() => { scaleRef.current        = scale        }, [scale])
 
-  // プロジェクト名に合わせてラベル列幅を自動調整
   useEffect(() => {
     if (!projects.length) return
     const canvas = document.createElement('canvas')
     const ctx = canvas.getContext('2d')
-    ctx.font = 'bold 14px sans-serif' // scale=1 時の fSm
+    ctx.font = 'bold 14px sans-serif'
     const maxNameW = Math.max(...projects.map(p => ctx.measureText(p.name).width))
-    // オーバーヘッド: paddingLeft(12) + 折りたたみBtn(14) + gap×3(24) + dot(10) + badge(30) + paddingRight(16) + バッファ(20)
     const needed = Math.ceil(maxNameW) + 126
     const newBaseW = Math.max(LABEL_W, needed)
     setLabelBaseW(newBaseW)
@@ -197,7 +218,6 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
     }
   }
 
-  // プロジェクト別グループ（全タスク表示時のみ）
   const projectGroups = useMemo(() => {
     if (!groupByProject) return null
     const projectIds = new Set(projects.map(p => p.id))
@@ -226,49 +246,107 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
     setViewStart(d)
   }
 
-  // ---- 行レンダラー ----
   const renderCellBg = () =>
-    days.map((day, idx) => (
-      <div
-        key={idx}
-        className="absolute top-0 bottom-0"
-        style={{
-          left: idx * cw, width: cw,
-          background: format(day, 'yyyy-MM-dd') === todayStr
-            ? 'rgba(99,102,241,0.05)'
-            : (day.getDay() === 0 || day.getDay() === 6) ? 'rgba(163,177,198,0.05)' : 'transparent',
-          borderRight: '1px solid rgba(163,177,198,0.12)',
-        }}
-      />
-    ))
-
-  const renderTodayLine = () =>
-    todayIdx >= 0 && (
-      <div
-        className="absolute top-0 bottom-0 z-10"
-        style={{ left: todayIdx * cw + cw / 2, width: 2, background: 'rgba(99,102,241,0.5)', borderRadius: 1, boxShadow: '0 0 6px rgba(99,102,241,0.4)' }}
-      />
-    )
+    days.map((day, idx) => {
+      const isToday = format(day, 'yyyy-MM-dd') === todayStr
+      const isWeekend = day.getDay() === 0 || day.getDay() === 6
+      return (
+        <div
+          key={idx}
+          className="absolute top-0 bottom-0"
+          style={{
+            left: idx * cw, width: cw,
+            background: isToday
+              ? 'rgba(14,165,233,0.25)'
+              : isWeekend ? 'rgba(163,177,198,0.05)' : 'transparent',
+            borderRight: '1px solid var(--nm-line)',
+          }}
+        />
+      )
+    })
 
   const barPad = Math.max(4, Math.round(8 * scale))
 
-  const renderTaskRow = (task) => {
+  const PlusButton = ({ taskId }) => (
+    <button
+      onClick={(e) => {
+        e.stopPropagation()
+        const todayFmt = format(today, 'yyyy-MM-dd')
+        const threeFmt = format(addDays(today, 3), 'yyyy-MM-dd')
+        setAddingSubtaskId(taskId)
+        setNewSubtaskTitle('')
+        setNewSubtaskDates({ start: todayFmt, end: threeFmt })
+        setCollapsedTaskIds(prev => { const next = new Set(prev); next.delete(taskId); return next })
+      }}
+      style={{
+        flexShrink: 0,
+        width: 20, height: 20, borderRadius: 5,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: 'var(--nm-muted)', opacity: 0.75,
+        background: 'var(--nm-bg)',
+        boxShadow: '2px 2px 4px var(--nm-dark), -1px -1px 3px var(--nm-light)',
+        border: 'none', cursor: 'pointer', padding: 0,
+      }}
+      title="サブタスクを追加"
+    >
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+      </svg>
+    </button>
+  )
+
+  const renderTaskRow = (task, isSubtask = false) => {
     const bar = getBarDisplay(task)
     const isDraggingThis = dragOverlay?.taskId === task.id
     const project = projects.find(p => p.id === task.project_id)
+    const rowH = isSubtask ? Math.round(rh * 0.82) : rh
+    const subBarPad = isSubtask ? Math.max(5, Math.round(11 * scale)) : barPad
+    const indentL = isSubtask ? Math.max(36, Math.round(50 * scale)) : 12
+    const taskSubs = !isSubtask ? (subtaskMap.get(task.id) || []) : []
+    const hasSubtasks = taskSubs.length > 0
+    const isTaskCollapsed = !isSubtask && collapsedTaskIds.has(task.id)
+
     return (
-      <div key={task.id} className="flex items-center" style={{ height: rh, borderBottom: '1px solid rgba(163,177,198,0.15)' }}>
+      <div key={task.id} className="flex items-center" style={{
+        height: rowH,
+        borderBottom: '1px solid var(--nm-line)',
+        background: isSubtask ? 'rgba(163,177,198,0.025)' : 'transparent',
+      }}>
         <div
-          className="flex items-center gap-2 px-4 h-full cursor-pointer flex-shrink-0"
-          style={{ width: lw, minWidth: lw }}
+          className="flex items-center gap-2 h-full flex-shrink-0"
+          style={{ width: lw, minWidth: lw, paddingLeft: indentL, paddingRight: 8, cursor: 'pointer', position: 'sticky', left: 0, zIndex: 15, background: 'var(--nm-bg)' }}
           onClick={() => !isDraggingThis && onEdit(task)}
         >
-          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: project?.color || '#6366f1' }} />
+          {!isSubtask && (
+            <div style={{ width: 14, height: 14, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {hasSubtasks && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); toggleTaskCollapse(task.id) }}
+                  style={{ width: 14, height: 14, background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--nm-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  title={isTaskCollapsed ? '展開' : '折りたたむ'}
+                >
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"
+                    style={{ transform: isTaskCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.18s ease' }}
+                  >
+                    <path d="M5 7L1 3h8z" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          )}
+          {isSubtask ? (
+            <span style={{ color: 'var(--nm-muted)', fontSize: fXxs, flexShrink: 0, opacity: 0.6 }}>└</span>
+          ) : (
+            <span className="rounded-full flex-shrink-0" style={{ width: 8, height: 8, backgroundColor: project?.color || '#6366f1' }} />
+          )}
           <span
             className="truncate flex-1 min-w-0"
             style={{
-              fontSize: fSm,
-              color: isDraggingThis ? 'var(--nm-accent)' : task.status === 'done' ? 'var(--nm-muted)' : (task.end_date && task.end_date < todayStr) ? '#f59e0b' : 'var(--nm-text)',
+              fontSize: isSubtask ? Math.max(10, Math.round(13 * scale)) : fSm,
+              color: isDraggingThis ? 'var(--nm-accent)'
+                : task.status === 'done' ? 'var(--nm-muted)'
+                : (task.end_date && task.end_date < todayStr) ? '#f59e0b'
+                : 'var(--nm-text)',
               fontWeight: isDraggingThis ? 600 : 400,
               textDecoration: task.status === 'done' && !isDraggingThis ? 'line-through' : 'none',
               transition: 'color 0.15s',
@@ -278,32 +356,36 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
               ? `${format(parseISO(dragOverlay.startStr), 'M/d')} 〜 ${format(parseISO(dragOverlay.endStr), 'M/d')}`
               : task.title}
           </span>
-          {task.status === 'done' && !isDraggingThis && (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-              <path d="M5 13l4 4L19 7" />
-            </svg>
-          )}
-          {task.status !== 'done' && task.end_date && task.end_date < todayStr && !isDraggingThis && (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-              <path d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          )}
+          {!isSubtask && onSubtaskCreate && <PlusButton taskId={task.id} />}
+          <div style={{ width: 18, height: 18, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            {task.status === 'done' && !isDraggingThis && (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M5 13l4 4L19 7" />
+              </svg>
+            )}
+            {task.status !== 'done' && task.end_date && task.end_date < todayStr && !isDraggingThis && (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            )}
+          </div>
         </div>
-        <div className="relative flex-shrink-0" style={{ width: gridWidth, height: rh }}>
+
+        <div className="relative flex-shrink-0" style={{ width: gridWidth, height: rowH }}>
           {renderCellBg()}
-          {renderTodayLine()}
+
           {bar && (
             <div
               className="absolute overflow-visible"
               style={{
-                top: barPad, bottom: barPad,
+                top: subBarPad, bottom: subBarPad,
                 left: bar.left, width: bar.width,
                 backgroundColor: STATUS_COLOR[task.status],
-                borderRadius: 8,
+                borderRadius: isSubtask ? 6 : 8,
                 boxShadow: isDraggingThis
                   ? '6px 6px 16px var(--nm-dark), -2px -2px 8px var(--nm-light)'
                   : '3px 3px 6px var(--nm-dark), -1px -1px 4px var(--nm-light)',
-                opacity: task.status === 'done' ? 0.75 : 1,
+                opacity: task.status === 'done' ? 0.75 : 0.85,
                 cursor: isDraggingThis ? 'grabbing' : 'grab',
                 transform: isDraggingThis ? 'scaleY(1.12)' : 'scaleY(1)',
                 transition: isDraggingThis ? 'none' : 'box-shadow 0.15s ease, transform 0.15s ease',
@@ -316,7 +398,7 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
               {task.progress > 0 && task.status !== 'done' && (
                 <div className="absolute top-0 left-0 bottom-0 rounded-l" style={{ width: `${task.progress}%`, background: 'rgba(255,255,255,0.28)', pointerEvents: 'none' }} />
               )}
-              {bar.width > 50 && (
+              {!isSubtask && bar.width > 50 && (
                 <span
                   className="absolute inset-0 flex items-center px-3 text-white font-medium truncate pointer-events-none"
                   style={{ fontSize: fXs, borderRadius: 8 }}
@@ -347,31 +429,137 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
     )
   }
 
-  const renderUndatedRow = (task) => (
-    <div key={task.id} className="flex items-center" style={{ height: rh, borderBottom: '1px solid rgba(163,177,198,0.15)' }}>
-      <div
-        className="flex items-center gap-2 px-4 h-full cursor-pointer flex-shrink-0"
-        style={{ width: lw, minWidth: lw }}
-        onClick={() => onEdit(task)}
-      >
-        <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: 'var(--nm-muted)' }} />
-        <span className="truncate" style={{ fontSize: fSm, color: 'var(--nm-muted)' }}>{task.title}</span>
+  const renderUndatedRow = (task) => {
+    const taskSubs = subtaskMap.get(task.id) || []
+    const hasSubtasks = taskSubs.length > 0
+    const isTaskCollapsed = collapsedTaskIds.has(task.id)
+    return (
+      <div key={task.id} className="flex items-center" style={{ height: rh, borderBottom: '1px solid var(--nm-line)' }}>
+        <div
+          className="flex items-center gap-2 h-full cursor-pointer flex-shrink-0"
+          style={{ width: lw, minWidth: lw, paddingLeft: 12, paddingRight: 8, position: 'sticky', left: 0, zIndex: 15, background: 'var(--nm-bg)' }}
+          onClick={() => onEdit(task)}
+        >
+          <div style={{ width: 14, height: 14, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            {hasSubtasks && (
+              <button
+                onClick={(e) => { e.stopPropagation(); toggleTaskCollapse(task.id) }}
+                style={{ width: 14, height: 14, background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--nm-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                title={isTaskCollapsed ? '展開' : '折りたたむ'}
+              >
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"
+                  style={{ transform: isTaskCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.18s ease' }}
+                >
+                  <path d="M5 7L1 3h8z" />
+                </svg>
+              </button>
+            )}
+          </div>
+          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: 'var(--nm-muted)' }} />
+          <span className="truncate flex-1" style={{ fontSize: fSm, color: 'var(--nm-muted)' }}>{task.title}</span>
+          {onSubtaskCreate && <PlusButton taskId={task.id} />}
+        </div>
+        <div className="flex-1 flex items-center px-4" style={{ fontSize: fXs, color: 'rgba(163,177,198,0.7)' }}>
+          開始日と終了日を設定してください
+        </div>
       </div>
-      <div className="flex-1 flex items-center px-4" style={{ fontSize: fXs, color: 'rgba(163,177,198,0.7)' }}>
-        開始日と終了日を設定してください
-      </div>
-    </div>
-  )
+    )
+  }
 
-  // ---- 日付ヘッダー（sticky / 共通） ----
-  const renderDateHeader = () => (
+  const renderSubtaskAddRow = (parentId) => {
+    const titleH  = Math.round(rh * 0.65)
+    const dateH   = Math.round(rh * 0.56)
+    const rowH    = titleH + dateH + Math.round(rh * 0.24)
+    const indentL = Math.max(36, Math.round(50 * scale))
+
+    const handleSubmit = () => {
+      if (!newSubtaskTitle.trim()) return
+      onSubtaskCreate(parentId, newSubtaskTitle.trim(), newSubtaskDates.start || null, newSubtaskDates.end || null)
+      setNewSubtaskTitle('')
+      setNewSubtaskDates({ start: '', end: '' })
+      setAddingSubtaskId(null)
+    }
+    const handleCancel = () => {
+      setAddingSubtaskId(null)
+      setNewSubtaskTitle('')
+      setNewSubtaskDates({ start: '', end: '' })
+    }
+
+    return (
+      <div key={`add-sub-${parentId}`} style={{
+        height: rowH,
+        display: 'flex',
+        borderBottom: '1px solid var(--nm-line)',
+        background: 'rgba(99,102,241,0.03)',
+      }}>
+        <div style={{
+          flexShrink: 0,
+          width: lw, minWidth: lw,
+          paddingLeft: indentL, paddingRight: 8,
+          paddingTop: Math.round(rh * 0.06), paddingBottom: Math.round(rh * 0.06),
+          display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 4,
+          position: 'sticky', left: 0, zIndex: 15, background: 'var(--nm-bg)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ color: 'var(--nm-accent)', fontSize: fXxs, flexShrink: 0, opacity: 0.8 }}>└</span>
+            <input
+              autoFocus
+              value={newSubtaskTitle}
+              onChange={e => setNewSubtaskTitle(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') handleSubmit()
+                if (e.key === 'Escape') handleCancel()
+              }}
+              placeholder="サブタスク名を入力..."
+              className="nm-input px-2 flex-1"
+              style={{ borderRadius: 6, height: titleH, fontSize: Math.max(10, Math.round(13 * scale)) }}
+            />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, paddingLeft: Math.round(fXxs + 8) }}>
+            <input
+              type="date"
+              value={newSubtaskDates.start}
+              onChange={e => setNewSubtaskDates(d => ({ ...d, start: e.target.value }))}
+              className="nm-input px-1 flex-1"
+              style={{ borderRadius: 6, height: dateH, fontSize: fXs }}
+            />
+            <span style={{ fontSize: fXs, color: 'var(--nm-muted)', flexShrink: 0 }}>〜</span>
+            <input
+              type="date"
+              value={newSubtaskDates.end}
+              onChange={e => setNewSubtaskDates(d => ({ ...d, end: e.target.value }))}
+              onKeyDown={e => {
+                if (e.key === 'Enter') handleSubmit()
+                if (e.key === 'Escape') handleCancel()
+              }}
+              className="nm-input px-1 flex-1"
+              style={{ borderRadius: 6, height: dateH, fontSize: fXs }}
+            />
+          </div>
+        </div>
+        <div className="relative flex-shrink-0" style={{ width: gridWidth, height: rowH }}>
+          {renderCellBg()}
+
+        </div>
+      </div>
+    )
+  }
+
+  const renderDateHeader = () => {
+    const projectKeys = projects.map(p => p.id ?? 'none')
+    const twsList = tasks.filter(t => !t.parent_id && subtaskMap.has(t.id))
+    const isAllCollapsed = (projectKeys.length + twsList.length) > 0 &&
+      projectKeys.every(k => collapsedProjects.has(k)) &&
+      twsList.every(t => collapsedTaskIds.has(t.id))
+    return (
     <div className="sticky top-0 z-20" style={{ background: 'var(--nm-bg)' }}>
-      <div className="flex" style={{ marginLeft: lw }}>
+      <div className="flex">
+        <div style={{ position: 'sticky', left: 0, zIndex: 22, width: lw, minWidth: lw, flexShrink: 0, background: 'var(--nm-bg)' }} />
         {monthGroups.map(g => (
           <div
             key={g.key}
             className="font-bold px-2 py-1.5 truncate flex-shrink-0"
-            style={{ fontSize: fXs, width: g.count * cw, color: 'var(--nm-accent)', borderRight: '1px solid rgba(163,177,198,0.3)' }}
+            style={{ fontSize: fXs, width: g.count * cw, color: 'var(--nm-accent)', borderRight: '1px solid var(--nm-line)' }}
           >
             {g.label}
           </div>
@@ -379,9 +567,26 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
       </div>
       <div className="flex" style={{ boxShadow: '0 4px 8px var(--nm-dark)' }}>
         <div
-          className="relative flex items-center px-4 py-2 font-semibold flex-shrink-0"
-          style={{ fontSize: fXs, width: lw, minWidth: lw, color: 'var(--nm-muted)' }}
+          className="relative flex items-center gap-2 py-2 font-semibold flex-shrink-0"
+          style={{ fontSize: fXs, width: lw, minWidth: lw, paddingLeft: 12, paddingRight: 16, color: 'var(--nm-muted)', position: 'sticky', left: 0, zIndex: 21, background: 'var(--nm-bg)' }}
         >
+          <button
+            onClick={isAllCollapsed ? expandAll : collapseAll}
+            className="flex items-center justify-center flex-shrink-0"
+            style={{
+              width: 14, height: 14,
+              background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+              color: 'var(--nm-muted)',
+            }}
+            title={isAllCollapsed ? 'すべて展開' : 'すべて折りたたむ'}
+          >
+            <svg
+              width="10" height="10" viewBox="0 0 10 10" fill="currentColor"
+              style={{ transform: isAllCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.18s ease' }}
+            >
+              <path d="M5 7L1 3h8z" />
+            </svg>
+          </button>
           タスク名
           <div
             className="absolute right-0 top-0 bottom-0 flex items-center justify-center"
@@ -405,10 +610,10 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
               className="flex flex-col items-center justify-center py-1 flex-shrink-0"
               style={{
                 width: cw,
-                background:  isToday ? 'rgba(99,102,241,0.08)' : isWeekend ? 'rgba(163,177,198,0.08)' : 'transparent',
-                color:       isToday ? 'var(--nm-accent)' : 'var(--nm-muted)',
+                background:  isToday ? 'rgba(14,165,233,0.20)' : isWeekend ? 'rgba(163,177,198,0.08)' : 'transparent',
+                color:       isToday ? '#0ea5e9' : 'var(--nm-muted)',
                 fontWeight:  isToday ? 700 : 400,
-                borderRight: '1px solid rgba(163,177,198,0.15)',
+                borderRight: '1px solid var(--nm-line)',
               }}
             >
               <span style={{ fontSize: fXs  }}>{format(day, 'd')}</span>
@@ -418,9 +623,9 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
         })}
       </div>
     </div>
-  )
+    )
+  }
 
-  // ---- プロジェクトブロック ----
   const getProjectDateRange = (dated) => {
     const valid = dated.filter(t => t.start_date && t.end_date)
     if (!valid.length) return null
@@ -433,6 +638,18 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
     }
   }
 
+  const renderTaskWithSubs = (task, renderFn) => {
+    const subs = subtaskMap.get(task.id) || []
+    const isCollapsed = collapsedTaskIds.has(task.id)
+    return [
+      renderFn(task),
+      ...(isCollapsed ? [] : [
+        ...subs.map(sub => renderTaskRow(sub, true)),
+        addingSubtaskId === task.id ? renderSubtaskAddRow(task.id) : null,
+      ]),
+    ].filter(Boolean)
+  }
+
   const renderProjectBlock = (group) => {
     const { project, dated, undated } = group
     const collapseKey = project.id ?? 'none'
@@ -441,7 +658,6 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
     const headerH     = Math.max(28, Math.round(40 * scale))
     const allDone     = totalCount > 0 && [...dated, ...undated].every(t => t.status === 'done')
 
-    // 折りたたみ時サマリーバー
     let summaryBar = null
     if (isCollapsed) {
       const range = getProjectDateRange(dated)
@@ -459,23 +675,20 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
       <div
         key={collapseKey}
         className="nm-raised-sm"
-        style={{ overflow: 'hidden', marginBottom: 16, borderRadius: 0 }}
+        style={{ marginBottom: 16, borderRadius: 0 }}
       >
-        {/* プロジェクトヘッダー */}
         <div
           className="flex items-center flex-shrink-0"
           style={{
             height: headerH,
             background: `${project.color}18`,
-            borderBottom: isCollapsed ? 'none' : '1px solid rgba(163,177,198,0.25)',
+            borderBottom: isCollapsed ? 'none' : '1px solid var(--nm-line)',
           }}
         >
-          {/* ラベル部分 */}
           <div
             className="flex items-center gap-2 flex-shrink-0"
-            style={{ width: lw, minWidth: lw, paddingLeft: 12, paddingRight: 16 }}
+            style={{ width: lw, minWidth: lw, paddingLeft: 12, paddingRight: 16, position: 'sticky', left: 0, zIndex: 15, backgroundColor: 'var(--nm-bg)', backgroundImage: `linear-gradient(${project.color}18, ${project.color}18)` }}
           >
-            {/* 折りたたみシェブロン */}
             <button
               onClick={() => toggleCollapse(collapseKey)}
               className="flex items-center justify-center flex-shrink-0"
@@ -513,11 +726,10 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
             )}
           </div>
 
-          {/* 折りたたみ時: グリッド + サマリーバー */}
           {isCollapsed && (
             <div className="relative flex-shrink-0" style={{ width: gridWidth, height: headerH }}>
               {renderCellBg()}
-              {renderTodayLine()}
+    
               {summaryBar && (
                 <div
                   className="absolute"
@@ -535,10 +747,9 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
           )}
         </div>
 
-        {/* 展開時: タスク行 */}
         {!isCollapsed && (
           <>
-            {dated.map(task => renderTaskRow(task))}
+            {dated.flatMap(task => renderTaskWithSubs(task, t => renderTaskRow(t, false)))}
             {undated.length > 0 && (
               <>
                 <div
@@ -549,7 +760,7 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
                     日程未設定
                   </span>
                 </div>
-                {undated.map(task => renderUndatedRow(task))}
+                {undated.flatMap(task => renderTaskWithSubs(task, renderUndatedRow))}
               </>
             )}
           </>
@@ -558,7 +769,6 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
     )
   }
 
-  // ---- フラット行リスト（特定プロジェクト選択時） ----
   const flatRows = useMemo(() => {
     if (groupByProject) return null
     return {
@@ -567,13 +777,23 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
     }
   }, [tasks, groupByProject])
 
+  const collapseAll = () => {
+    setCollapsedProjects(new Set([...projects.map(p => p.id), 'none']))
+    setCollapsedTaskIds(new Set(
+      tasks.filter(t => !t.parent_id && subtaskMap.has(t.id)).map(t => t.id)
+    ))
+  }
+  const expandAll = () => {
+    setCollapsedProjects(new Set())
+    setCollapsedTaskIds(new Set())
+  }
+
   const Divider = () => (
     <div style={{ width: 1, height: 16, background: 'rgba(163,177,198,0.35)' }} />
   )
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      {/* コントロールバー */}
       <div className="flex items-center gap-3 pl-0 py-4" style={{ paddingRight: 10 }}>
         <button
           onClick={onNewTask}
@@ -658,9 +878,7 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
       ) : (
         <div className="overflow-auto" style={{ flex: 1, minHeight: 0 }}>
           <div style={{ minWidth: lw + gridWidth }}>
-
             {renderDateHeader()}
-
             {groupByProject && projectGroups ? (
               <div style={{ padding: '12px 0 4px' }}>
                 {projectGroups.map(group => renderProjectBlock(group))}
@@ -675,7 +893,6 @@ export default function GanttChart({ tasks, projects, onEdit, onDatesChange, onN
                 })}
               </div>
             )}
-
           </div>
         </div>
       )}

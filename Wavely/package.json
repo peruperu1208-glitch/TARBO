@@ -4,7 +4,7 @@
   "description": "タスク管理とガントチャートアプリ",
   "main": "electron/main.js",
   "scripts": {
-    "dev": "concurrently -n VITE,ELECTRON -c cyan,green \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "dev": "concurrently -n VITE,ELECTRON -c cyan,green \"vite\" \"wait-on http://localhost:5173 && node electron/launch.js\"",
     "build": "vite build",
     "dist": "vite build && electron-builder"
   },
@@ -18,7 +18,7 @@
     "@vitejs/plugin-react": "^4.2.1",
     "autoprefixer": "^10.4.19",
     "concurrently": "^8.2.2",
-    "electron": "^30.0.1",
+    "electron": "^30.5.1",
     "electron-builder": "^24.13.3",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.3",
