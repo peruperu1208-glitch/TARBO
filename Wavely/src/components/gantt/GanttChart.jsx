@@ -16,7 +16,7 @@ const STATUS_COLOR = {
   done: '#10b981',
 }
 
-export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onDatesChange, onNewTask, onSubtaskCreate, groupByProject = false }) {
+export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onDatesChange, onNewTask, onSubtaskCreate, onReorderTasks, groupByProject = false }) {
   const today = useMemo(() => new Date(), [])
 
   const [viewStart, setViewStart] = useState(() => {
@@ -24,13 +24,19 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
     d.setDate(d.getDate() - 7)
     return d
   })
-  const [daysToShow, setDaysToShow] = useState(60)
-  const [zoom, setZoom] = useState(100)
+  const [daysToShow, setDaysToShow] = useState(() => {
+    const v = Number(localStorage.getItem('turbo-days'))
+    return [30, 60, 90].includes(v) ? v : 60
+  })
+  const [zoom, setZoom] = useState(() => {
+    const v = Number(localStorage.getItem('turbo-zoom'))
+    return [50, 75, 100, 125, 150].includes(v) ? v : 100
+  })
   const ZOOM_LEVELS = [50, 75, 100, 125, 150]
   const zoomIdx = ZOOM_LEVELS.indexOf(zoom)
-  const zoomDown = () => { if (zoomIdx > 0) setZoom(ZOOM_LEVELS[zoomIdx - 1]) }
-  const zoomUp   = () => { if (zoomIdx < ZOOM_LEVELS.length - 1) setZoom(ZOOM_LEVELS[zoomIdx + 1]) }
-  const zoomReset = () => setZoom(100)
+  const zoomDown = () => { const z = ZOOM_LEVELS[zoomIdx - 1]; if (z) { setZoom(z); localStorage.setItem('turbo-zoom', z) } }
+  const zoomUp   = () => { const z = ZOOM_LEVELS[zoomIdx + 1]; if (z) { setZoom(z); localStorage.setItem('turbo-zoom', z) } }
+  const zoomReset = () => { setZoom(100); localStorage.setItem('turbo-zoom', 100) }
 
   const scale = zoom / 100
   const cw  = Math.round(CELL_W  * scale)
@@ -118,6 +124,17 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
 
   const [dragOverlay, setDragOverlay] = useState(null)
   const [collapsedProjects, setCollapsedProjects] = useState(new Set())
+  const [rowDragTaskId, setRowDragTaskId] = useState(null)
+  const [rowDragOverId, setRowDragOverId] = useState(null)
+  const [rowInsertAbove, setRowInsertAbove] = useState(true)
+  const [statusFilter, setStatusFilter] = useState(null) // null | 'todo' | 'in_progress' | 'done'
+
+  const filteredTasks = useMemo(
+    () => statusFilter ? tasks.filter(t => t.status === statusFilter) : tasks,
+    [tasks, statusFilter]
+  )
+
+  const toggleStatusFilter = (key) => setStatusFilter(prev => prev === key ? null : key)
   const toggleCollapse = (id) => {
     setCollapsedProjects(prev => {
       const next = new Set(prev)
@@ -189,6 +206,17 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
     }
   }, [])
 
+  // 設定モーダルからのズーム・表示日数変更をリアルタイムで反映
+  useEffect(() => {
+    const handler = (e) => {
+      const { zoom: z, daysToShow: d } = e.detail
+      if (z !== undefined) setZoom(z)
+      if (d !== undefined) setDaysToShow(d)
+    }
+    window.addEventListener('turbo-gantt-settings', handler)
+    return () => window.removeEventListener('turbo-gantt-settings', handler)
+  }, [])
+
   const startDrag = (e, task, type) => {
     e.preventDefault()
     didDragRef.current = false
@@ -224,11 +252,11 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
     const groups = projects
       .map(project => ({
         project,
-        dated:   tasks.filter(t => t.project_id === project.id && t.start_date && t.end_date),
-        undated: tasks.filter(t => t.project_id === project.id && (!t.start_date || !t.end_date)),
+        dated:   filteredTasks.filter(t => t.project_id === project.id && t.start_date && t.end_date),
+        undated: filteredTasks.filter(t => t.project_id === project.id && (!t.start_date || !t.end_date)),
       }))
       .filter(g => g.dated.length + g.undated.length > 0)
-    const orphans = tasks.filter(t => !projectIds.has(t.project_id))
+    const orphans = filteredTasks.filter(t => !projectIds.has(t.project_id))
     if (orphans.length > 0) {
       groups.push({
         project: { id: null, name: '未分類', color: '#9ca3af' },
@@ -237,7 +265,7 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
       })
     }
     return groups
-  }, [tasks, projects, groupByProject])
+  }, [filteredTasks, projects, groupByProject])
 
   const navigate = (delta) => setViewStart(d => addDays(d, delta))
   const goToday = () => {
@@ -305,126 +333,179 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
     const taskSubs = !isSubtask ? (subtaskMap.get(task.id) || []) : []
     const hasSubtasks = taskSubs.length > 0
     const isTaskCollapsed = !isSubtask && collapsedTaskIds.has(task.id)
+    const isRowDragTarget = !isSubtask && rowDragOverId === task.id && rowDragTaskId && rowDragTaskId !== task.id
+    const isRowDragging = !isSubtask && rowDragTaskId === task.id
 
     return (
-      <div key={task.id} className="flex items-center" style={{
-        height: rowH,
-        borderBottom: '1px solid var(--nm-line)',
-        background: isSubtask ? 'rgba(163,177,198,0.025)' : 'transparent',
-      }}>
-        <div
-          className="flex items-center gap-2 h-full flex-shrink-0"
-          style={{ width: lw, minWidth: lw, paddingLeft: indentL, paddingRight: 8, cursor: 'pointer', position: 'sticky', left: 0, zIndex: 15, background: 'var(--nm-bg)' }}
-          onClick={() => !isDraggingThis && onEdit(task)}
-        >
-          {!isSubtask && (
-            <div style={{ width: 14, height: 14, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              {hasSubtasks && (
-                <button
-                  onClick={(e) => { e.stopPropagation(); toggleTaskCollapse(task.id) }}
-                  style={{ width: 14, height: 14, background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--nm-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                  title={isTaskCollapsed ? '展開' : '折りたたむ'}
-                >
-                  <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"
-                    style={{ transform: isTaskCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.18s ease' }}
+      <div
+        key={task.id}
+        style={{ position: 'relative' }}
+        onDragOver={!isSubtask ? (e) => {
+          if (!rowDragTaskId) return
+          e.preventDefault()
+          const dragged = tasks.find(t => t.id === rowDragTaskId)
+          if (groupByProject && dragged?.project_id !== task.project_id) return
+          const rect = e.currentTarget.getBoundingClientRect()
+          setRowDragOverId(task.id)
+          setRowInsertAbove(e.clientY < rect.top + rect.height / 2)
+        } : undefined}
+        onDragLeave={!isSubtask ? (e) => {
+          if (!e.currentTarget.contains(e.relatedTarget)) setRowDragOverId(null)
+        } : undefined}
+        onDrop={!isSubtask ? (e) => {
+          e.preventDefault()
+          if (rowDragTaskId && rowDragTaskId !== task.id) {
+            const dragged = tasks.find(t => t.id === rowDragTaskId)
+            if (!groupByProject || dragged?.project_id === task.project_id) {
+              onReorderTasks(rowDragTaskId, task.id, rowInsertAbove)
+            }
+          }
+          setRowDragTaskId(null)
+          setRowDragOverId(null)
+        } : undefined}
+      >
+        {isRowDragTarget && rowInsertAbove && (
+          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 2, borderRadius: 999, background: 'var(--nm-accent)', zIndex: 50, pointerEvents: 'none' }} />
+        )}
+        <div className="flex items-center" style={{
+          height: rowH,
+          borderBottom: '1px solid var(--nm-line)',
+          background: isSubtask ? 'rgba(163,177,198,0.025)' : 'transparent',
+          opacity: isRowDragging ? 0.4 : 1,
+        }}>
+          <div
+            className="flex items-center gap-2 h-full flex-shrink-0"
+            style={{ width: lw, minWidth: lw, paddingLeft: indentL, paddingRight: 8, cursor: 'pointer', position: 'sticky', left: 0, zIndex: 15, background: 'var(--nm-bg)' }}
+            onClick={() => !isDraggingThis && onEdit(task)}
+          >
+            {!isSubtask && onReorderTasks && (
+              <div
+                draggable
+                onDragStart={(e) => { e.stopPropagation(); e.dataTransfer.effectAllowed = 'move'; setRowDragTaskId(task.id) }}
+                onDragEnd={() => { setRowDragTaskId(null); setRowDragOverId(null) }}
+                onClick={(e) => e.stopPropagation()}
+                style={{ flexShrink: 0, width: 12, cursor: 'grab', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.3 }}
+                title="ドラッグして並び替え"
+              >
+                <svg width="8" height="12" viewBox="0 0 8 12" fill="currentColor" style={{ color: 'var(--nm-muted)' }}>
+                  <circle cx="2" cy="2" r="1.2" /><circle cx="6" cy="2" r="1.2" />
+                  <circle cx="2" cy="6" r="1.2" /><circle cx="6" cy="6" r="1.2" />
+                  <circle cx="2" cy="10" r="1.2" /><circle cx="6" cy="10" r="1.2" />
+                </svg>
+              </div>
+            )}
+            {!isSubtask && (
+              <div style={{ width: 14, height: 14, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {hasSubtasks && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); toggleTaskCollapse(task.id) }}
+                    style={{ width: 14, height: 14, background: 'none', border: 'none', cursor: 'pointer', padding: 0, color: 'var(--nm-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    title={isTaskCollapsed ? '展開' : '折りたたむ'}
                   >
-                    <path d="M5 7L1 3h8z" />
-                  </svg>
-                </button>
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"
+                      style={{ transform: isTaskCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.18s ease' }}
+                    >
+                      <path d="M5 7L1 3h8z" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+            )}
+            {isSubtask ? (
+              <span style={{ color: 'var(--nm-muted)', fontSize: fXxs, flexShrink: 0, opacity: 0.6 }}>└</span>
+            ) : (
+              <span className="rounded-full flex-shrink-0" style={{ width: 8, height: 8, backgroundColor: project?.color || '#6366f1' }} />
+            )}
+            <span
+              className="truncate flex-1 min-w-0"
+              style={{
+                fontSize: isSubtask ? Math.max(10, Math.round(13 * scale)) : fSm,
+                color: isDraggingThis ? 'var(--nm-accent)'
+                  : task.status === 'done' ? 'var(--nm-muted)'
+                  : (task.end_date && task.end_date < todayStr) ? '#f43f5e'
+                  : 'var(--nm-text)',
+                fontWeight: isDraggingThis ? 600 : 400,
+                textDecoration: task.status === 'done' && !isDraggingThis ? 'line-through' : 'none',
+                transition: 'color 0.15s',
+              }}
+            >
+              {isDraggingThis
+                ? `${format(parseISO(dragOverlay.startStr), 'M/d')} 〜 ${format(parseISO(dragOverlay.endStr), 'M/d')}`
+                : task.title}
+            </span>
+            {!isSubtask && onSubtaskCreate && <PlusButton taskId={task.id} />}
+            <div style={{ width: 18, height: 18, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {task.status === 'done' && !isDraggingThis && (
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M5 13l4 4L19 7" />
+                </svg>
+              )}
+              {task.status !== 'done' && task.end_date && task.end_date < todayStr && !isDraggingThis && (
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#f43f5e" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
               )}
             </div>
-          )}
-          {isSubtask ? (
-            <span style={{ color: 'var(--nm-muted)', fontSize: fXxs, flexShrink: 0, opacity: 0.6 }}>└</span>
-          ) : (
-            <span className="rounded-full flex-shrink-0" style={{ width: 8, height: 8, backgroundColor: project?.color || '#6366f1' }} />
-          )}
-          <span
-            className="truncate flex-1 min-w-0"
-            style={{
-              fontSize: isSubtask ? Math.max(10, Math.round(13 * scale)) : fSm,
-              color: isDraggingThis ? 'var(--nm-accent)'
-                : task.status === 'done' ? 'var(--nm-muted)'
-                : (task.end_date && task.end_date < todayStr) ? '#f59e0b'
-                : 'var(--nm-text)',
-              fontWeight: isDraggingThis ? 600 : 400,
-              textDecoration: task.status === 'done' && !isDraggingThis ? 'line-through' : 'none',
-              transition: 'color 0.15s',
-            }}
-          >
-            {isDraggingThis
-              ? `${format(parseISO(dragOverlay.startStr), 'M/d')} 〜 ${format(parseISO(dragOverlay.endStr), 'M/d')}`
-              : task.title}
-          </span>
-          {!isSubtask && onSubtaskCreate && <PlusButton taskId={task.id} />}
-          <div style={{ width: 18, height: 18, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            {task.status === 'done' && !isDraggingThis && (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M5 13l4 4L19 7" />
-              </svg>
-            )}
-            {task.status !== 'done' && task.end_date && task.end_date < todayStr && !isDraggingThis && (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
+          </div>
+
+          <div className="relative flex-shrink-0" style={{ width: gridWidth, height: rowH }}>
+            {renderCellBg()}
+
+            {bar && (
+              <div
+                className="absolute overflow-visible"
+                style={{
+                  top: subBarPad, bottom: subBarPad,
+                  left: bar.left, width: bar.width,
+                  backgroundColor: STATUS_COLOR[task.status],
+                  borderRadius: isSubtask ? 6 : 8,
+                  boxShadow: isDraggingThis
+                    ? '6px 6px 16px var(--nm-dark), -2px -2px 8px var(--nm-light)'
+                    : '3px 3px 6px var(--nm-dark), -1px -1px 4px var(--nm-light)',
+                  opacity: task.status === 'done' ? 0.75 : 0.85,
+                  cursor: isDraggingThis ? 'grabbing' : 'grab',
+                  transform: isDraggingThis ? 'scaleY(1.12)' : 'scaleY(1)',
+                  transition: isDraggingThis ? 'none' : 'box-shadow 0.15s ease, transform 0.15s ease',
+                  zIndex: isDraggingThis ? 20 : 1,
+                  userSelect: 'none',
+                }}
+                onMouseDown={(e) => startDrag(e, task, 'move')}
+                onClick={() => { if (!didDragRef.current) onEdit(task) }}
+              >
+                {task.progress > 0 && task.status !== 'done' && (
+                  <div className="absolute top-0 left-0 bottom-0 rounded-l" style={{ width: `${task.progress}%`, background: 'rgba(255,255,255,0.28)', pointerEvents: 'none' }} />
+                )}
+                {!isSubtask && bar.width > 50 && (
+                  <span
+                    className="absolute inset-0 flex items-center px-3 text-white font-medium truncate pointer-events-none"
+                    style={{ fontSize: fXs, borderRadius: 8 }}
+                  >
+                    {task.title}
+                  </span>
+                )}
+                <div
+                  className="absolute left-0 top-0 bottom-0 z-10 flex items-center justify-center opacity-0 hover:opacity-100"
+                  style={{ width: HANDLE_W + 4, cursor: 'ew-resize', transition: 'opacity 0.15s' }}
+                  onMouseDown={(e) => { e.stopPropagation(); startDrag(e, task, 'left') }}
+                >
+                  <div style={{ width: 2, height: '60%', background: 'rgba(255,255,255,0.8)', borderRadius: 1 }} />
+                  <div style={{ width: 2, height: '40%', background: 'rgba(255,255,255,0.8)', borderRadius: 1, marginLeft: 2 }} />
+                </div>
+                <div
+                  className="absolute right-0 top-0 bottom-0 z-10 flex items-center justify-center opacity-0 hover:opacity-100"
+                  style={{ width: HANDLE_W + 4, cursor: 'ew-resize', transition: 'opacity 0.15s' }}
+                  onMouseDown={(e) => { e.stopPropagation(); startDrag(e, task, 'right') }}
+                >
+                  <div style={{ width: 2, height: '40%', background: 'rgba(255,255,255,0.8)', borderRadius: 1, marginRight: 2 }} />
+                  <div style={{ width: 2, height: '60%', background: 'rgba(255,255,255,0.8)', borderRadius: 1 }} />
+                </div>
+              </div>
             )}
           </div>
         </div>
-
-        <div className="relative flex-shrink-0" style={{ width: gridWidth, height: rowH }}>
-          {renderCellBg()}
-
-          {bar && (
-            <div
-              className="absolute overflow-visible"
-              style={{
-                top: subBarPad, bottom: subBarPad,
-                left: bar.left, width: bar.width,
-                backgroundColor: STATUS_COLOR[task.status],
-                borderRadius: isSubtask ? 6 : 8,
-                boxShadow: isDraggingThis
-                  ? '6px 6px 16px var(--nm-dark), -2px -2px 8px var(--nm-light)'
-                  : '3px 3px 6px var(--nm-dark), -1px -1px 4px var(--nm-light)',
-                opacity: task.status === 'done' ? 0.75 : 0.85,
-                cursor: isDraggingThis ? 'grabbing' : 'grab',
-                transform: isDraggingThis ? 'scaleY(1.12)' : 'scaleY(1)',
-                transition: isDraggingThis ? 'none' : 'box-shadow 0.15s ease, transform 0.15s ease',
-                zIndex: isDraggingThis ? 20 : 1,
-                userSelect: 'none',
-              }}
-              onMouseDown={(e) => startDrag(e, task, 'move')}
-              onClick={() => { if (!didDragRef.current) onEdit(task) }}
-            >
-              {task.progress > 0 && task.status !== 'done' && (
-                <div className="absolute top-0 left-0 bottom-0 rounded-l" style={{ width: `${task.progress}%`, background: 'rgba(255,255,255,0.28)', pointerEvents: 'none' }} />
-              )}
-              {!isSubtask && bar.width > 50 && (
-                <span
-                  className="absolute inset-0 flex items-center px-3 text-white font-medium truncate pointer-events-none"
-                  style={{ fontSize: fXs, borderRadius: 8 }}
-                >
-                  {task.title}
-                </span>
-              )}
-              <div
-                className="absolute left-0 top-0 bottom-0 z-10 flex items-center justify-center opacity-0 hover:opacity-100"
-                style={{ width: HANDLE_W + 4, cursor: 'ew-resize', transition: 'opacity 0.15s' }}
-                onMouseDown={(e) => { e.stopPropagation(); startDrag(e, task, 'left') }}
-              >
-                <div style={{ width: 2, height: '60%', background: 'rgba(255,255,255,0.8)', borderRadius: 1 }} />
-                <div style={{ width: 2, height: '40%', background: 'rgba(255,255,255,0.8)', borderRadius: 1, marginLeft: 2 }} />
-              </div>
-              <div
-                className="absolute right-0 top-0 bottom-0 z-10 flex items-center justify-center opacity-0 hover:opacity-100"
-                style={{ width: HANDLE_W + 4, cursor: 'ew-resize', transition: 'opacity 0.15s' }}
-                onMouseDown={(e) => { e.stopPropagation(); startDrag(e, task, 'right') }}
-              >
-                <div style={{ width: 2, height: '40%', background: 'rgba(255,255,255,0.8)', borderRadius: 1, marginRight: 2 }} />
-                <div style={{ width: 2, height: '60%', background: 'rgba(255,255,255,0.8)', borderRadius: 1 }} />
-              </div>
-            </div>
-          )}
-        </div>
+        {isRowDragTarget && !rowInsertAbove && (
+          <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 2, borderRadius: 999, background: 'var(--nm-accent)', zIndex: 50, pointerEvents: 'none' }} />
+        )}
       </div>
     )
   }
@@ -772,10 +853,10 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
   const flatRows = useMemo(() => {
     if (groupByProject) return null
     return {
-      dated:   tasks.filter(t => t.start_date && t.end_date),
-      undated: tasks.filter(t => !t.start_date || !t.end_date),
+      dated:   filteredTasks.filter(t => t.start_date && t.end_date),
+      undated: filteredTasks.filter(t => !t.start_date || !t.end_date),
     }
-  }, [tasks, groupByProject])
+  }, [filteredTasks, groupByProject])
 
   const collapseAll = () => {
     setCollapsedProjects(new Set([...projects.map(p => p.id), 'none']))
@@ -818,13 +899,27 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
           {format(viewStart, 'yyyy年M月d日', { locale: ja })} 〜 {format(viewEnd, 'M月d日', { locale: ja })}
         </span>
 
-        <div className="ml-auto flex items-center gap-4">
-          {[['todo', '未着手'], ['in_progress', '進行中'], ['done', '完了']].map(([key, label]) => (
-            <div key={key} className="flex items-center gap-1.5">
-              <span style={{ width: 12, height: 12, borderRadius: 8, backgroundColor: STATUS_COLOR[key], boxShadow: '1px 1px 3px var(--nm-dark)', display: 'inline-block', flexShrink: 0 }} />
-              <span className="text-xs" style={{ color: 'var(--nm-muted)' }}>{label}</span>
-            </div>
-          ))}
+        <div className="ml-auto flex items-center gap-2">
+          {[['todo', '未着手'], ['in_progress', '進行中'], ['done', '完了']].map(([key, label]) => {
+            const isActive = statusFilter === key
+            const isDimmed = statusFilter !== null && !isActive
+            return (
+              <button
+                key={key}
+                onClick={() => toggleStatusFilter(key)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 ${isActive ? 'nm-pressed-xs' : 'nm-btn'}`}
+                style={{
+                  borderRadius: 8,
+                  opacity: isDimmed ? 0.4 : 1,
+                  transition: 'opacity 0.15s',
+                }}
+                title={isActive ? 'フィルターを解除' : `${label}のみ表示`}
+              >
+                <span style={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: STATUS_COLOR[key], display: 'inline-block', flexShrink: 0 }} />
+                <span className="text-xs font-medium" style={{ color: isActive ? STATUS_COLOR[key] : 'var(--nm-muted)' }}>{label}</span>
+              </button>
+            )
+          })}
 
           <Divider />
 
@@ -854,7 +949,7 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
           <span className="text-xs" style={{ color: 'var(--nm-muted)' }}>表示日数</span>
           <select
             value={daysToShow}
-            onChange={(e) => setDaysToShow(Number(e.target.value))}
+            onChange={(e) => { const v = Number(e.target.value); setDaysToShow(v); localStorage.setItem('turbo-days', v) }}
             className="nm-select px-3 py-1.5 text-xs"
             style={{ width: 80 }}
           >

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu } = require('electron')
+const { app, BrowserWindow, ipcMain, Menu, dialog } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const initSqlJs = require('sql.js')
@@ -6,6 +6,24 @@ const initSqlJs = require('sql.js')
 const isDev = !app.isPackaged
 let db
 let dbPath
+
+// ---- Config (DB保存先など永続設定) ----
+
+let configPath
+let config = {}
+
+function loadConfig() {
+  configPath = path.join(app.getPath('userData'), 'config.json')
+  try {
+    if (fs.existsSync(configPath)) {
+      config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+    }
+  } catch (_) { config = {} }
+}
+
+function saveConfig() {
+  try { fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8') } catch (_) {}
+}
 
 // ---- DB helpers ----
 
@@ -45,7 +63,10 @@ function lastId() {
 
 async function initDatabase() {
   const SQL = await initSqlJs()
-  dbPath = path.join(app.getPath('userData'), 'turbo.db')
+  const defaultDbPath = path.join(app.getPath('userData'), 'turbo.db')
+
+  // カスタム保存先が設定済みでファイルが存在する場合はそちらを使用
+  dbPath = (config.dbPath && fs.existsSync(config.dbPath)) ? config.dbPath : defaultDbPath
 
   if (fs.existsSync(dbPath)) {
     db = new SQL.Database(fs.readFileSync(dbPath))
@@ -79,6 +100,8 @@ async function initDatabase() {
   )`)
   try { db.run(`ALTER TABLE tasks ADD COLUMN comment TEXT DEFAULT ''`) } catch(_) {}
   try { db.run(`ALTER TABLE tasks ADD COLUMN parent_id INTEGER`) } catch(_) {}
+  try { db.run(`ALTER TABLE projects ADD COLUMN sort_order INTEGER DEFAULT 0`) } catch(_) {}
+  try { db.run(`ALTER TABLE tasks ADD COLUMN sort_order INTEGER DEFAULT 0`) } catch(_) {}
 
   const row = queryOne('SELECT COUNT(*) as count FROM projects')
   if (!row || row.count === 0) {
@@ -122,7 +145,7 @@ const TASK_SELECT = `
 
 function setupIpcHandlers() {
   ipcMain.handle('get-projects', () =>
-    queryAll('SELECT * FROM projects ORDER BY created_at ASC')
+    queryAll('SELECT * FROM projects ORDER BY sort_order ASC, created_at ASC')
   )
 
   ipcMain.handle('create-project', (_, { name, description, color }) => {
@@ -146,8 +169,22 @@ function setupIpcHandlers() {
 
   ipcMain.handle('get-tasks', (_, projectId) => {
     const sql = TASK_SELECT +
-      (projectId ? 'WHERE t.project_id = ? ORDER BY t.created_at ASC' : 'ORDER BY t.created_at ASC')
+      (projectId
+        ? 'WHERE t.project_id = ? ORDER BY t.sort_order ASC, t.created_at ASC'
+        : 'ORDER BY t.sort_order ASC, t.created_at ASC')
     return queryAll(sql, projectId ? [projectId] : [])
+  })
+
+  ipcMain.handle('reorder-projects', (_, ids) => {
+    ids.forEach((id, index) => db.run('UPDATE projects SET sort_order = ? WHERE id = ?', [index, id]))
+    saveDb()
+    return { success: true }
+  })
+
+  ipcMain.handle('reorder-tasks', (_, ids) => {
+    ids.forEach((id, index) => db.run('UPDATE tasks SET sort_order = ? WHERE id = ?', [index, id]))
+    saveDb()
+    return { success: true }
   })
 
   ipcMain.handle('create-task', (_, task) => {
@@ -185,6 +222,35 @@ function setupIpcHandlers() {
     execute('DELETE FROM tasks WHERE id = ?', [id])
     return { success: true }
   })
+
+  ipcMain.handle('get-db-path', () => dbPath)
+
+  ipcMain.handle('choose-db-folder', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+      title: 'データベースの保存先フォルダを選択',
+      buttonLabel: 'この場所に保存',
+    })
+    if (result.canceled || !result.filePaths.length) return null
+
+    const newDbPath = path.join(result.filePaths[0], 'turbo.db')
+    if (newDbPath === dbPath) return dbPath
+
+    // 現在のDBデータを新しい場所に書き出し
+    const oldDbPath = dbPath
+    const data = db.export()
+    fs.writeFileSync(newDbPath, Buffer.from(data))
+
+    // 元ファイルを削除（移動扱い）
+    try { fs.unlinkSync(oldDbPath) } catch (_) {}
+
+    // dbPath を更新して config に保存
+    dbPath = newDbPath
+    config.dbPath = newDbPath
+    saveConfig()
+
+    return newDbPath
+  })
 }
 
 // ---- Window ----
@@ -195,6 +261,7 @@ function createWindow() {
     height: 900,
     minWidth: 960,
     minHeight: 600,
+    icon: path.join(__dirname, 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -216,6 +283,7 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
+  loadConfig()
   await initDatabase()
   setupIpcHandlers()
   createWindow()

@@ -5,15 +5,20 @@ import TaskList from './components/tasks/TaskList'
 import GanttChart from './components/gantt/GanttChart'
 import TaskModal from './components/tasks/TaskModal'
 import ProjectModal from './components/projects/ProjectModal'
+import SettingsModal from './components/settings/SettingsModal'
+import SplashScreen from './components/SplashScreen'
 
 export default function App() {
+  const [showSplash, setShowSplash] = useState(true)
   const [projects, setProjects] = useState([])
   const [tasks, setTasks] = useState([])
   const [selectedProjectId, setSelectedProjectId] = useState(null)
   const [view, setView] = useState('gantt')
   const [taskModal, setTaskModal] = useState({ open: false, task: null, defaultStatus: 'todo' })
   const [projectModal, setProjectModal] = useState({ open: false, project: null })
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [theme, setTheme] = useState(() => localStorage.getItem('turbo-theme') || 'light')
+  const [projectSearch, setProjectSearch] = useState('')
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -164,6 +169,28 @@ export default function App() {
     loadTasks()
   }
 
+  const handleReorderProjects = async (draggedId, targetId, insertAbove) => {
+    const list = [...projects]
+    const fromIdx = list.findIndex(p => p.id === draggedId)
+    const [item] = list.splice(fromIdx, 1)
+    let toIdx = list.findIndex(p => p.id === targetId)
+    if (!insertAbove) toIdx++
+    list.splice(toIdx, 0, item)
+    await window.electronAPI.reorderProjects(list.map(p => p.id))
+    loadProjects()
+  }
+
+  const handleReorderTasks = async (draggedId, targetId, insertAbove) => {
+    const list = [...tasks]
+    const fromIdx = list.findIndex(t => t.id === draggedId)
+    const [item] = list.splice(fromIdx, 1)
+    let toIdx = list.findIndex(t => t.id === targetId)
+    if (!insertAbove) toIdx++
+    list.splice(toIdx, 0, item)
+    await window.electronAPI.reorderTasks(list.map(t => t.id))
+    loadTasks()
+  }
+
   const handleTaskDatesChange = async (task, start_date, end_date) => {
     await window.electronAPI.updateTask({ ...task, start_date, end_date })
     if (task.parent_id) {
@@ -190,7 +217,21 @@ export default function App() {
 
   const selectedProject = projects.find(p => p.id === selectedProjectId) || null
 
+  // 全タスク表示時のみ検索でプロジェクトを絞り込む
+  const displayProjects = useMemo(() => {
+    if (selectedProjectId || !projectSearch.trim()) return projects
+    const q = projectSearch.toLowerCase()
+    return projects.filter(p => p.name.toLowerCase().includes(q))
+  }, [projects, projectSearch, selectedProjectId])
+
   const rootTasks = useMemo(() => tasks.filter(t => !t.parent_id), [tasks])
+
+  // フィルター有効時はガントに渡すタスクも絞り込む（orphans として未分類表示されるのを防ぐ）
+  const displayRootTasks = useMemo(() => {
+    if (selectedProjectId || !projectSearch.trim()) return rootTasks
+    const ids = new Set(displayProjects.map(p => p.id))
+    return rootTasks.filter(t => ids.has(t.project_id))
+  }, [rootTasks, selectedProjectId, projectSearch, displayProjects])
 
   const completedProjectIds = useMemo(() => {
     const ids = new Set()
@@ -206,11 +247,14 @@ export default function App() {
       <Sidebar
         projects={projects}
         selectedProjectId={selectedProjectId}
-        onSelectProject={setSelectedProjectId}
+        onSelectProject={(id) => { setSelectedProjectId(id); setProjectSearch('') }}
         onNewProject={() => setProjectModal({ open: true, project: null })}
         onEditProject={(p) => setProjectModal({ open: true, project: p })}
         onDeleteProject={handleDeleteProject}
+        onReorderProjects={handleReorderProjects}
         completedProjectIds={completedProjectIds}
+        projectSearch={projectSearch}
+        onProjectSearch={setProjectSearch}
         theme={theme}
         onToggleTheme={toggleTheme}
       />
@@ -221,30 +265,33 @@ export default function App() {
           onViewChange={setView}
           selectedProject={selectedProject}
           taskCount={tasks.length}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
 
         <main className="flex-1 overflow-hidden p-6 flex flex-col" style={{ position: 'relative' }}>
           {view === 'list' ? (
             <TaskList
-              tasks={rootTasks}
+              tasks={displayRootTasks}
               allTasks={tasks}
               projects={projects}
               onSave={handleUpdateTask}
               onDelete={handleDeleteTask}
               onStatusChange={handleStatusChange}
+              onReorderTasks={handleReorderTasks}
               onNewTask={(status) => setTaskModal({ open: true, task: null, defaultStatus: status })}
               onEdit={(task) => setTaskModal({ open: true, task })}
               onSubtaskCreate={handleSubtaskCreate}
             />
           ) : (
             <GanttChart
-              tasks={rootTasks}
+              tasks={displayRootTasks}
               allTasks={tasks}
-              projects={projects}
+              projects={displayProjects}
               onEdit={(task) => setTaskModal({ open: true, task })}
               onDatesChange={handleTaskDatesChange}
               onNewTask={() => setTaskModal({ open: true, task: null })}
               onSubtaskCreate={handleSubtaskCreate}
+              onReorderTasks={handleReorderTasks}
               groupByProject={!selectedProjectId}
             />
           )}
@@ -264,6 +311,14 @@ export default function App() {
         </main>
       </div>
 
+      {settingsOpen && (
+        <SettingsModal
+          theme={theme}
+          onThemeChange={setTheme}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
+
       {projectModal.open && (
         <ProjectModal
           project={projectModal.project}
@@ -271,6 +326,8 @@ export default function App() {
           onClose={() => setProjectModal({ open: false, project: null })}
         />
       )}
+
+      {showSplash && <SplashScreen onDone={() => setShowSplash(false)} />}
     </div>
   )
 }

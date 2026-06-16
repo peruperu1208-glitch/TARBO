@@ -84,13 +84,13 @@ function KanbanCard({ task, projects, subtasks, isExpanded, onExpand, onCollapse
             </svg>
           )}
           {isOverdue && (
-            <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="#f59e0b" strokeWidth={2}>
+            <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="#f43f5e" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           )}
           <p
             className={`text-sm font-medium leading-snug flex-1 min-w-0 ${task.status === 'done' ? 'line-through' : ''}`}
-            style={{ color: task.status === 'done' ? 'var(--nm-muted)' : isOverdue ? '#f59e0b' : 'var(--nm-text)' }}
+            style={{ color: task.status === 'done' ? 'var(--nm-muted)' : isOverdue ? '#f43f5e' : 'var(--nm-text)' }}
           >
             {task.title}
           </p>
@@ -202,14 +202,14 @@ function KanbanCard({ task, projects, subtasks, isExpanded, onExpand, onCollapse
                   style={{
                     fontSize: 12,
                     cursor: 'pointer',
-                    color: sub.status === 'done' ? 'var(--nm-muted)' : subOverdue ? '#f59e0b' : 'var(--nm-text)',
+                    color: sub.status === 'done' ? 'var(--nm-muted)' : subOverdue ? '#f43f5e' : 'var(--nm-text)',
                     textDecoration: sub.status === 'done' ? 'line-through' : 'none',
                   }}
                 >
                   {sub.title}
                 </span>
                 {sub.end_date && sub.status !== 'done' && (
-                  <span style={{ fontSize: 11, color: subOverdue ? '#f59e0b' : 'var(--nm-muted)', flexShrink: 0 }}>
+                  <span style={{ fontSize: 11, color: subOverdue ? '#f43f5e' : 'var(--nm-muted)', flexShrink: 0 }}>
                     {sub.end_date.slice(5).replace('-', '/')}
                   </span>
                 )}
@@ -414,10 +414,12 @@ function KanbanCard({ task, projects, subtasks, isExpanded, onExpand, onCollapse
   )
 }
 
-export default function TaskList({ tasks, allTasks = [], projects, onSave, onDelete, onStatusChange, onNewTask, onEdit, onSubtaskCreate }) {
+export default function TaskList({ tasks, allTasks = [], projects, onSave, onDelete, onStatusChange, onReorderTasks, onNewTask, onEdit, onSubtaskCreate }) {
   const [expandedId, setExpandedId] = useState(null)
   const [draggedTaskId, setDraggedTaskId] = useState(null)
   const [dragOverCol, setDragOverCol] = useState(null)
+  const [dragOverCardId, setDragOverCardId] = useState(null)
+  const [dragInsertAbove, setDragInsertAbove] = useState(true)
 
   if (tasks.length === 0) {
     return (
@@ -486,17 +488,21 @@ export default function TaskList({ tasks, allTasks = [], projects, onSave, onDel
               className="nm-pressed overflow-y-auto"
               style={{
                 flex: 1, minHeight: 0, borderRadius: 8, padding: 12,
-                outline: dragOverCol === col.key && draggedTaskId ? `2px solid ${col.color}88` : '2px solid transparent',
+                outline: dragOverCol === col.key && draggedTaskId && !dragOverCardId ? `2px solid ${col.color}88` : '2px solid transparent',
                 transition: 'outline 0.15s ease',
               }}
               onDragOver={(e) => { e.preventDefault(); setDragOverCol(col.key) }}
-              onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOverCol(null) }}
+              onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) { setDragOverCol(null); setDragOverCardId(null) } }}
               onDrop={(e) => {
                 e.preventDefault()
-                const task = tasks.find(t => t.id === draggedTaskId)
-                if (task && task.status !== col.key) onStatusChange(task, col.key)
+                // カード上でのドロップはカード側で処理済みのためスキップ
+                if (!dragOverCardId) {
+                  const task = tasks.find(t => t.id === draggedTaskId)
+                  if (task && task.status !== col.key) onStatusChange(task, col.key)
+                }
                 setDraggedTaskId(null)
                 setDragOverCol(null)
+                setDragOverCardId(null)
               }}
             >
               {colTasks.length === 0 ? (
@@ -514,24 +520,61 @@ export default function TaskList({ tasks, allTasks = [], projects, onSave, onDel
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {colTasks.map(task => {
                     const subs = allTasks.filter(t => t.parent_id === task.id)
+                    const isDropTarget = dragOverCardId === task.id && draggedTaskId !== task.id
                     return (
-                      <KanbanCard
+                      <div
                         key={task.id}
-                        task={task}
-                        projects={projects}
-                        subtasks={subs}
-                        isExpanded={expandedId === task.id}
-                        onExpand={() => setExpandedId(task.id)}
-                        onCollapse={() => setExpandedId(null)}
-                        onSave={onSave}
-                        onDelete={onDelete}
-                        onStatusChange={onStatusChange}
-                        onEdit={onEdit}
-                        onSubtaskCreate={onSubtaskCreate}
-                        isDragging={draggedTaskId === task.id}
-                        onDragStart={() => { setDraggedTaskId(task.id); setExpandedId(null) }}
-                        onDragEnd={() => { setDraggedTaskId(null); setDragOverCol(null) }}
-                      />
+                        style={{ position: 'relative' }}
+                        onDragOver={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          const rect = e.currentTarget.getBoundingClientRect()
+                          setDragOverCardId(task.id)
+                          setDragInsertAbove(e.clientY < rect.top + rect.height / 2)
+                          setDragOverCol(col.key)
+                        }}
+                        onDragLeave={(e) => {
+                          if (!e.currentTarget.contains(e.relatedTarget)) setDragOverCardId(null)
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          const draggedTask = tasks.find(t => t.id === draggedTaskId)
+                          if (draggedTask && draggedTask.id !== task.id) {
+                            if (draggedTask.status === col.key) {
+                              onReorderTasks(draggedTaskId, task.id, dragInsertAbove)
+                            } else {
+                              onStatusChange(draggedTask, col.key)
+                            }
+                          }
+                          setDraggedTaskId(null)
+                          setDragOverCol(null)
+                          setDragOverCardId(null)
+                        }}
+                      >
+                        {isDropTarget && dragInsertAbove && (
+                          <div style={{ height: 2, borderRadius: 999, background: col.color, margin: '0 0 4px' }} />
+                        )}
+                        <KanbanCard
+                          task={task}
+                          projects={projects}
+                          subtasks={subs}
+                          isExpanded={expandedId === task.id}
+                          onExpand={() => setExpandedId(task.id)}
+                          onCollapse={() => setExpandedId(null)}
+                          onSave={onSave}
+                          onDelete={onDelete}
+                          onStatusChange={onStatusChange}
+                          onEdit={onEdit}
+                          onSubtaskCreate={onSubtaskCreate}
+                          isDragging={draggedTaskId === task.id}
+                          onDragStart={() => { setDraggedTaskId(task.id); setExpandedId(null) }}
+                          onDragEnd={() => { setDraggedTaskId(null); setDragOverCol(null); setDragOverCardId(null) }}
+                        />
+                        {isDropTarget && !dragInsertAbove && (
+                          <div style={{ height: 2, borderRadius: 999, background: col.color, margin: '4px 0 0' }} />
+                        )}
+                      </div>
                     )
                   })}
                 </div>

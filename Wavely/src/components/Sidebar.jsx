@@ -7,12 +7,18 @@ export default function Sidebar({
   onNewProject,
   onEditProject,
   onDeleteProject,
+  onReorderProjects,
   completedProjectIds,
+  projectSearch,
+  onProjectSearch,
   theme,
   onToggleTheme,
 }) {
   const [sidebarMode, setSidebarMode] = useState('normal') // 'normal' | 'edit' | 'delete'
   const [confirmDeleteId, setConfirmDeleteId] = useState(null)
+  const [dragProjectId, setDragProjectId] = useState(null)
+  const [dragOverProjectId, setDragOverProjectId] = useState(null)
+  const [dragInsertAbove, setDragInsertAbove] = useState(true)
 
   const resetMode = () => {
     setSidebarMode('normal')
@@ -47,29 +53,17 @@ export default function Sidebar({
   return (
     <aside className="nm-sidebar flex flex-col h-screen flex-shrink-0" style={{ width: 260 }}>
       {/* ロゴ */}
-      <div className="px-5 py-5">
-        <div
-          className="flex items-center gap-3"
-          style={{
-            WebkitMaskImage: 'linear-gradient(to right, black 10%, rgba(0,0,0,0.35) 100%)',
-            maskImage:        'linear-gradient(to right, black 10%, rgba(0,0,0,0.35) 100%)',
-          }}
-        >
-          {/* rotate(45) で右上に飛ぶロケット。鼻先→右上、炎→左下 */}
-          <svg width="22" height="22" viewBox="0 2 18 18" fill="none" stroke="var(--nm-text)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-            <g transform="rotate(45, 9, 12)">
-              <path d="M7 3.5 Q9 0.5 11 3.5 C12 7 12 11 12 14 L6 14 C6 11 6 7 7 3.5Z" />
-              <circle cx="9" cy="8" r="1.8" strokeWidth="1.8" />
-              <path d="M6 12 L3.5 16 L6 16" />
-              <path d="M12 12 L14.5 16 L12 16" />
-              <line x1="6" y1="16" x2="12" y2="16" />
-              <path d="M7 16 Q9 22 11 16" />
-            </g>
-          </svg>
-          <span style={{ fontWeight: 800, fontSize: 22, letterSpacing: '0.06em', color: 'var(--nm-text)' }}>
-            TARBO
-          </span>
-        </div>
+      <div className="py-5 flex justify-center">
+        <span style={{
+          fontFamily: "'Bebas Neue', sans-serif",
+          fontSize: 30,
+          letterSpacing: '0.15em',
+          color: 'var(--nm-muted)',
+          textShadow: '3px 3px 6px var(--nm-dark), -2px -2px 4px var(--nm-light)',
+          lineHeight: 1,
+        }}>
+          TARBO
+        </span>
       </div>
 
       {/* ナビゲーション */}
@@ -132,6 +126,41 @@ export default function Sidebar({
           </div>
         </div>
 
+        {/* プロジェクト検索 */}
+        {!selectedProjectId && (
+          <div className="px-1 pb-1">
+            <div
+              className="nm-pressed-sm flex items-center gap-2 px-2.5"
+              style={{ borderRadius: 8, height: 30 }}
+            >
+              <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} style={{ color: 'var(--nm-muted)', opacity: 0.7 }}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <input
+                type="text"
+                value={projectSearch}
+                onChange={(e) => onProjectSearch(e.target.value)}
+                placeholder="絞り込む..."
+                style={{
+                  flex: 1, background: 'none', border: 'none', outline: 'none',
+                  fontSize: 12, color: 'var(--nm-text)',
+                }}
+              />
+              {projectSearch && (
+                <button
+                  onClick={() => onProjectSearch('')}
+                  style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', display: 'flex', color: 'var(--nm-muted)' }}
+                  title="クリア"
+                >
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* モードヒント */}
         {sidebarMode !== 'normal' && (
           <div className="px-3 pb-1">
@@ -142,42 +171,84 @@ export default function Sidebar({
         )}
 
         {/* プロジェクト行 */}
-        {projects.map((project) => {
+        {projectSearch && !selectedProjectId && projects.filter(p => p.name.toLowerCase().includes(projectSearch.toLowerCase())).length === 0 && (
+          <div className="px-3 py-2 text-xs" style={{ color: 'var(--nm-muted)', opacity: 0.6 }}>
+            一致するプロジェクトがありません
+          </div>
+        )}
+        {(projectSearch && !selectedProjectId
+          ? projects.filter(p => p.name.toLowerCase().includes(projectSearch.toLowerCase()))
+          : projects
+        ).map((project) => {
           const isConfirming = confirmDeleteId === project.id
           const isSelected = selectedProjectId === project.id && sidebarMode === 'normal'
+          const isDragging = dragProjectId === project.id
+          const isDropTarget = dragOverProjectId === project.id && dragProjectId !== project.id
 
           return (
-            <button
-              key={project.id}
-              onClick={() => handleProjectClick(project)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium transition-all rounded-lg
-                ${isSelected ? 'nm-nav-active' : ''}
-                ${isConfirming ? 'nm-pressed-xs' : ''}`}
-              style={{
-                color: isConfirming
-                  ? '#ef4444'
-                  : sidebarMode === 'edit'
-                    ? 'var(--nm-accent)'
-                    : sidebarMode === 'delete'
-                      ? 'var(--nm-muted)'
-                      : isSelected ? 'var(--nm-accent)' : 'var(--nm-text)',
-                background: isConfirming ? 'rgba(239,68,68,0.08)' : undefined,
-              }}
-            >
-              <span
-                className="w-3 h-3 rounded-full flex-shrink-0"
-                style={{ backgroundColor: project.color }}
-              />
-              <span className="truncate flex-1 text-left">{project.name}</span>
-              {completedProjectIds?.has(project.id) && !isConfirming && (
-                <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="#10b981" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                </svg>
+            <div key={project.id} style={{ position: 'relative' }}>
+              {/* 上インジケーター */}
+              {isDropTarget && dragInsertAbove && (
+                <div style={{ height: 2, borderRadius: 999, background: 'var(--nm-accent)', margin: '2px 4px' }} />
               )}
-              {isConfirming && (
-                <span className="text-xs flex-shrink-0" style={{ color: '#ef4444' }}>削除?</span>
+              <button
+                onClick={() => handleProjectClick(project)}
+                draggable={sidebarMode === 'normal'}
+                onDragStart={(e) => {
+                  e.dataTransfer.effectAllowed = 'move'
+                  setDragProjectId(project.id)
+                }}
+                onDragEnd={() => { setDragProjectId(null); setDragOverProjectId(null) }}
+                onDragOver={(e) => {
+                  e.preventDefault()
+                  const rect = e.currentTarget.getBoundingClientRect()
+                  setDragOverProjectId(project.id)
+                  setDragInsertAbove(e.clientY < rect.top + rect.height / 2)
+                }}
+                onDragLeave={() => setDragOverProjectId(null)}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  if (dragProjectId && dragProjectId !== project.id) {
+                    onReorderProjects(dragProjectId, project.id, dragInsertAbove)
+                  }
+                  setDragProjectId(null)
+                  setDragOverProjectId(null)
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium transition-all rounded-lg
+                  ${isSelected ? 'nm-nav-active' : ''}
+                  ${isConfirming ? 'nm-pressed-xs' : ''}`}
+                style={{
+                  opacity: isDragging ? 0.4 : 1,
+                  cursor: sidebarMode === 'normal' ? 'grab' : undefined,
+                  color: isConfirming
+                    ? '#ef4444'
+                    : sidebarMode === 'edit'
+                      ? 'var(--nm-accent)'
+                      : sidebarMode === 'delete'
+                        ? 'var(--nm-muted)'
+                        : isSelected ? 'var(--nm-accent)' : 'var(--nm-text)',
+                  background: isConfirming ? 'rgba(239,68,68,0.08)' : undefined,
+                }}
+              >
+                <span
+                  className="w-3 h-3 rounded-full flex-shrink-0"
+                  style={{ backgroundColor: project.color }}
+                />
+                <span className="truncate flex-1 text-left">{project.name}</span>
+                {completedProjectIds?.has(project.id) && !isConfirming && (
+                  <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="#10b981" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                )}
+                {isConfirming && (
+                  <span className="text-xs flex-shrink-0" style={{ color: '#ef4444' }}>削除?</span>
+                )}
+              </button>
+              {/* 下インジケーター */}
+              {isDropTarget && !dragInsertAbove && (
+                <div style={{ height: 2, borderRadius: 999, background: 'var(--nm-accent)', margin: '2px 4px' }} />
               )}
-            </button>
+            </div>
           )
         })}
       </nav>
