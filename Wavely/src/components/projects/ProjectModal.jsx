@@ -54,6 +54,7 @@ export default function ProjectModal({ project, onSave, onClose }) {
               value={form.name}
               onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))}
               required
+              autoFocus
               placeholder="プロジェクト名を入力"
               className="nm-input px-4 py-2.5 text-sm"
             />

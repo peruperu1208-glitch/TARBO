@@ -102,6 +102,7 @@ async function initDatabase() {
   try { db.run(`ALTER TABLE tasks ADD COLUMN parent_id INTEGER`) } catch(_) {}
   try { db.run(`ALTER TABLE projects ADD COLUMN sort_order INTEGER DEFAULT 0`) } catch(_) {}
   try { db.run(`ALTER TABLE tasks ADD COLUMN sort_order INTEGER DEFAULT 0`) } catch(_) {}
+  try { db.run(`ALTER TABLE projects ADD COLUMN archived INTEGER DEFAULT 0`) } catch(_) {}
 
   const row = queryOne('SELECT COUNT(*) as count FROM projects')
   if (!row || row.count === 0) {
@@ -145,12 +146,28 @@ const TASK_SELECT = `
 
 function setupIpcHandlers() {
   ipcMain.handle('get-projects', () =>
-    queryAll('SELECT * FROM projects ORDER BY sort_order ASC, created_at ASC')
+    queryAll('SELECT * FROM projects WHERE (archived = 0 OR archived IS NULL) ORDER BY sort_order ASC, created_at ASC')
   )
 
+  ipcMain.handle('get-archived-projects', () =>
+    queryAll('SELECT * FROM projects WHERE archived = 1 ORDER BY sort_order ASC, created_at ASC')
+  )
+
+  ipcMain.handle('archive-project', (_, id) => {
+    execute('UPDATE projects SET archived = 1 WHERE id = ?', [id])
+    return { success: true }
+  })
+
+  ipcMain.handle('unarchive-project', (_, id) => {
+    execute('UPDATE projects SET archived = 0 WHERE id = ?', [id])
+    return { success: true }
+  })
+
   ipcMain.handle('create-project', (_, { name, description, color }) => {
-    db.run('INSERT INTO projects (name, description, color) VALUES (?, ?, ?)',
-      [name, description || '', color || '#6366f1'])
+    const maxRow = queryOne('SELECT MAX(sort_order) as max FROM projects WHERE (archived = 0 OR archived IS NULL)')
+    const nextOrder = (maxRow?.max ?? -1) + 1
+    db.run('INSERT INTO projects (name, description, color, sort_order) VALUES (?, ?, ?, ?)',
+      [name, description || '', color || '#6366f1', nextOrder])
     const id = lastId()
     saveDb()
     return queryOne('SELECT * FROM projects WHERE id = ?', [id])
@@ -167,11 +184,13 @@ function setupIpcHandlers() {
     return { success: true }
   })
 
-  ipcMain.handle('get-tasks', (_, projectId) => {
+  ipcMain.handle('get-tasks', (_, projectId, includeArchived) => {
     const sql = TASK_SELECT +
       (projectId
         ? 'WHERE t.project_id = ? ORDER BY t.sort_order ASC, t.created_at ASC'
-        : 'ORDER BY t.sort_order ASC, t.created_at ASC')
+        : includeArchived
+          ? 'ORDER BY t.sort_order ASC, t.created_at ASC'
+          : 'WHERE (p.archived = 0 OR p.archived IS NULL) ORDER BY t.sort_order ASC, t.created_at ASC')
     return queryAll(sql, projectId ? [projectId] : [])
   })
 

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { differenceInDays, addDays, parseISO, format } from 'date-fns'
 import Sidebar from './components/Sidebar'
 import Header from './components/Header'
 import TaskList from './components/tasks/TaskList'
@@ -11,6 +12,7 @@ import SplashScreen from './components/SplashScreen'
 export default function App() {
   const [showSplash, setShowSplash] = useState(true)
   const [projects, setProjects] = useState([])
+  const [archivedProjects, setArchivedProjects] = useState([])
   const [tasks, setTasks] = useState([])
   const [selectedProjectId, setSelectedProjectId] = useState(null)
   const [view, setView] = useState('gantt')
@@ -19,6 +21,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [theme, setTheme] = useState(() => localStorage.getItem('turbo-theme') || 'light')
   const [projectSearch, setProjectSearch] = useState('')
+  const [showArchived, setShowArchived] = useState(false)
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -28,14 +31,18 @@ export default function App() {
   const toggleTheme = () => setTheme(t => t === 'light' ? 'dark' : 'light')
 
   const loadProjects = useCallback(async () => {
-    const data = await window.electronAPI.getProjects()
+    const [data, archived] = await Promise.all([
+      window.electronAPI.getProjects(),
+      window.electronAPI.getArchivedProjects(),
+    ])
     setProjects(data)
+    setArchivedProjects(archived)
   }, [])
 
   const loadTasks = useCallback(async () => {
-    const data = await window.electronAPI.getTasks(selectedProjectId)
+    const data = await window.electronAPI.getTasks(selectedProjectId, showArchived && !selectedProjectId)
     setTasks(data)
-  }, [selectedProjectId])
+  }, [selectedProjectId, showArchived])
 
   useEffect(() => { loadProjects() }, [loadProjects])
   useEffect(() => { loadTasks() }, [loadTasks])
@@ -169,6 +176,18 @@ export default function App() {
     loadTasks()
   }
 
+  const handleArchiveProject = async (id) => {
+    await window.electronAPI.archiveProject(id)
+    if (selectedProjectId === id) setSelectedProjectId(null)
+    loadProjects()
+    loadTasks()
+  }
+
+  const handleUnarchiveProject = async (id) => {
+    await window.electronAPI.unarchiveProject(id)
+    loadProjects()
+  }
+
   const handleReorderProjects = async (draggedId, targetId, insertAbove) => {
     const list = [...projects]
     const fromIdx = list.findIndex(p => p.id === draggedId)
@@ -193,6 +212,20 @@ export default function App() {
 
   const handleTaskDatesChange = async (task, start_date, end_date) => {
     await window.electronAPI.updateTask({ ...task, start_date, end_date })
+    // 親タスク移動（期間が変わらない）ならサブタスクも同じ日数だけ移動
+    if (!task.parent_id && task.start_date && task.end_date && start_date && end_date) {
+      const delta = differenceInDays(parseISO(start_date), parseISO(task.start_date))
+      if (delta !== 0 && delta === differenceInDays(parseISO(end_date), parseISO(task.end_date))) {
+        const subtasks = tasks.filter(t => t.parent_id === task.id && t.start_date && t.end_date)
+        for (const sub of subtasks) {
+          await window.electronAPI.updateTask({
+            ...sub,
+            start_date: format(addDays(parseISO(sub.start_date), delta), 'yyyy-MM-dd'),
+            end_date:   format(addDays(parseISO(sub.end_date),   delta), 'yyyy-MM-dd'),
+          })
+        }
+      }
+    }
     if (task.parent_id) {
       const parent = tasks.find(t => t.id === task.parent_id)
       if (parent) {
@@ -217,21 +250,25 @@ export default function App() {
 
   const selectedProject = projects.find(p => p.id === selectedProjectId) || null
 
-  // 全タスク表示時のみ検索でプロジェクトを絞り込む
+  // アーカイブ表示ON時はアーカイブ済みプロジェクトのみ、OFF時は通常プロジェクトのみ
   const displayProjects = useMemo(() => {
-    if (selectedProjectId || !projectSearch.trim()) return projects
+    const base = (showArchived && !selectedProjectId)
+      ? archivedProjects
+      : projects
+    if (!projectSearch.trim()) return base
     const q = projectSearch.toLowerCase()
-    return projects.filter(p => p.name.toLowerCase().includes(q))
-  }, [projects, projectSearch, selectedProjectId])
+    return base.filter(p => p.name.toLowerCase().includes(q))
+  }, [projects, archivedProjects, projectSearch, selectedProjectId, showArchived])
 
   const rootTasks = useMemo(() => tasks.filter(t => !t.parent_id), [tasks])
 
-  // フィルター有効時はガントに渡すタスクも絞り込む（orphans として未分類表示されるのを防ぐ）
+  // アーカイブ表示ON時・検索時はdisplayProjectsでタスクを絞り込む
   const displayRootTasks = useMemo(() => {
-    if (selectedProjectId || !projectSearch.trim()) return rootTasks
+    if (selectedProjectId) return rootTasks
+    if (!showArchived && !projectSearch.trim()) return rootTasks
     const ids = new Set(displayProjects.map(p => p.id))
     return rootTasks.filter(t => ids.has(t.project_id))
-  }, [rootTasks, selectedProjectId, projectSearch, displayProjects])
+  }, [rootTasks, selectedProjectId, projectSearch, displayProjects, showArchived])
 
   const completedProjectIds = useMemo(() => {
     const ids = new Set()
@@ -246,15 +283,20 @@ export default function App() {
     <div className="flex h-screen overflow-hidden" style={{ background: 'var(--nm-bg)' }}>
       <Sidebar
         projects={projects}
+        archivedProjects={archivedProjects}
         selectedProjectId={selectedProjectId}
-        onSelectProject={(id) => { setSelectedProjectId(id); setProjectSearch('') }}
+        onSelectProject={(id) => { setSelectedProjectId(id) }}
         onNewProject={() => setProjectModal({ open: true, project: null })}
         onEditProject={(p) => setProjectModal({ open: true, project: p })}
         onDeleteProject={handleDeleteProject}
+        onArchiveProject={handleArchiveProject}
+        onUnarchiveProject={handleUnarchiveProject}
         onReorderProjects={handleReorderProjects}
         completedProjectIds={completedProjectIds}
         projectSearch={projectSearch}
         onProjectSearch={setProjectSearch}
+        showArchived={showArchived}
+        onToggleShowArchived={() => setShowArchived(v => !v)}
         theme={theme}
         onToggleTheme={toggleTheme}
       />

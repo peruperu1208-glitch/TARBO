@@ -1,13 +1,13 @@
-import { useState, useMemo, useRef, useEffect } from 'react'
+import { useState, useMemo, useRef, useEffect, useLayoutEffect } from 'react'
 import {
   format, addDays, eachDayOfInterval,
   differenceInDays, parseISO, isValid, isBefore, isAfter,
 } from 'date-fns'
 import { ja } from 'date-fns/locale'
 
-const CELL_W  = 36
-const ROW_H   = 44
-const LABEL_W = 200
+const CELL_W  = 32
+const ROW_H   = 40
+const LABEL_W = 180
 const HANDLE_W = 10
 
 const STATUS_COLOR = {
@@ -19,11 +19,8 @@ const STATUS_COLOR = {
 export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onDatesChange, onNewTask, onSubtaskCreate, onReorderTasks, groupByProject = false }) {
   const today = useMemo(() => new Date(), [])
 
-  const [viewStart, setViewStart] = useState(() => {
-    const d = new Date(today.getFullYear(), today.getMonth(), 1)
-    d.setDate(d.getDate() - 7)
-    return d
-  })
+  const [viewStart, setViewStart] = useState(() => addDays(today, -9))
+  const [extraLeft, setExtraLeft] = useState(0)
   const [daysToShow, setDaysToShow] = useState(() => {
     const v = Number(localStorage.getItem('turbo-days'))
     return [30, 60, 90].includes(v) ? v : 60
@@ -47,8 +44,10 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
   const fXs  = Math.max(9,  Math.round(12 * scale))
   const fXxs = Math.max(8,  Math.round(10 * scale))
 
-  const viewEnd   = addDays(viewStart, daysToShow - 1)
-  const days      = useMemo(() => eachDayOfInterval({ start: viewStart, end: viewEnd }), [viewStart, viewEnd])
+  const viewEnd      = addDays(viewStart, daysToShow - 1)
+  // グリッドの実際の先頭（extraLeft分だけ過去に拡張）
+  const displayStart = useMemo(() => addDays(viewStart, -extraLeft), [viewStart, extraLeft])
+  const days         = useMemo(() => eachDayOfInterval({ start: displayStart, end: viewEnd }), [displayStart, viewEnd])
   const gridWidth = days.length * cw
 
   const monthGroups = useMemo(() => {
@@ -102,8 +101,20 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
   const resizeRef       = useRef(null)
   const labelBaseWRef   = useRef(LABEL_W)
   const scaleRef        = useRef(scale)
+  const scrollContainerRef    = useRef(null)
+  const panInfo               = useRef(null)
+  const pendingScrollAdjust   = useRef(0)
 
-  useEffect(() => { viewStartRef.current    = viewStart    }, [viewStart])
+  // displayStart が変化した直後（レイアウト確定後）にスクロール位置を補正
+  useLayoutEffect(() => {
+    if (pendingScrollAdjust.current === 0 || !scrollContainerRef.current) return
+    scrollContainerRef.current.scrollLeft += pendingScrollAdjust.current
+    pendingScrollAdjust.current = 0
+    // 再レンダリング中のマウス移動分を次フレームでスキップしてジャンプを防ぐ
+    if (panInfo.current) panInfo.current.skipNextDelta = true
+  }, [displayStart])
+
+  useEffect(() => { viewStartRef.current    = displayStart }, [displayStart])
   useEffect(() => { viewEndRef.current      = viewEnd      }, [viewEnd])
   useEffect(() => { onDatesChangeRef.current = onDatesChange }, [onDatesChange])
   useEffect(() => { onEditRef.current       = onEdit       }, [onEdit])
@@ -127,14 +138,19 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
   const [rowDragTaskId, setRowDragTaskId] = useState(null)
   const [rowDragOverId, setRowDragOverId] = useState(null)
   const [rowInsertAbove, setRowInsertAbove] = useState(true)
-  const [statusFilter, setStatusFilter] = useState(null) // null | 'todo' | 'in_progress' | 'done'
+  const [statusFilter, setStatusFilter] = useState(new Set())
 
   const filteredTasks = useMemo(
-    () => statusFilter ? tasks.filter(t => t.status === statusFilter) : tasks,
+    () => statusFilter.size > 0 ? tasks.filter(t => statusFilter.has(t.status)) : tasks,
     [tasks, statusFilter]
   )
 
-  const toggleStatusFilter = (key) => setStatusFilter(prev => prev === key ? null : key)
+  const toggleStatusFilter = (key) => setStatusFilter(prev => {
+    const next = new Set(prev)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    return next
+  })
   const toggleCollapse = (id) => {
     setCollapsedProjects(prev => {
       const next = new Set(prev)
@@ -151,6 +167,45 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
         const newBaseW = Math.max(80, resizeRef.current.startBaseW + dx / scaleRef.current)
         labelBaseWRef.current = newBaseW
         setLabelBaseW(newBaseW)
+        return
+      }
+      if (panInfo.current) {
+        // ボタンを離したまま（context menu 等でmouseupを取りこぼした場合）パン解除
+        if (e.buttons === 0) {
+          panInfo.current = null
+          document.body.style.cursor = ''
+          document.body.style.userSelect = ''
+          return
+        }
+        const dx = e.clientX - panInfo.current.startX
+        const dy = e.clientY - panInfo.current.startY
+        if (!panInfo.current.active && (Math.abs(dx) >= 4 || Math.abs(dy) >= 4)) {
+          panInfo.current.active = true
+          document.body.style.cursor = 'grabbing'
+          document.body.style.userSelect = 'none'
+        }
+        if (panInfo.current.active && scrollContainerRef.current) {
+          const el = scrollContainerRef.current
+          // 再レンダリング直後はprevXが古いためスキップしてジャンプを防ぐ
+          if (panInfo.current.skipNextDelta) {
+            panInfo.current.skipNextDelta = false
+            panInfo.current.prevX = e.clientX
+            panInfo.current.prevY = e.clientY
+          } else {
+            // 前フレームからの差分で動かすことで速度が常に1:1になる
+            const ddx = e.clientX - panInfo.current.prevX
+            const ddy = e.clientY - panInfo.current.prevY
+            panInfo.current.prevX = e.clientX
+            panInfo.current.prevY = e.clientY
+            el.scrollLeft -= ddx
+            el.scrollTop  -= ddy
+            // 左端に近づいたら過去30日分をグリッドに追加
+            if (el.scrollLeft < cwRef.current * 7 && pendingScrollAdjust.current === 0) {
+              pendingScrollAdjust.current = 30 * cwRef.current
+              setExtraLeft(prev => prev + 30)
+            }
+          }
+        }
         return
       }
       if (!dragInfo.current) return
@@ -184,6 +239,12 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
     const onMouseUp = () => {
       if (resizeRef.current) {
         resizeRef.current = null
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+        return
+      }
+      if (panInfo.current) {
+        panInfo.current = null
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
         return
@@ -232,15 +293,34 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
     if (dragOverlay?.taskId === task.id) {
       return { left: dragOverlay.left, width: dragOverlay.width, isDragging: true }
     }
+    // 親タスクを移動中はサブタスクのバーも追従
+    if (task.parent_id && dragOverlay?.taskId === task.parent_id && dragInfo.current?.type === 'move') {
+      const parentTask = tasks.find(t => t.id === task.parent_id)
+      if (parentTask?.start_date && dragOverlay.startStr && task.start_date && task.end_date) {
+        const delta = differenceInDays(parseISO(dragOverlay.startStr), parseISO(parentTask.start_date))
+        if (delta !== 0) {
+          const ns = addDays(parseISO(task.start_date), delta)
+          const ne = addDays(parseISO(task.end_date),   delta)
+          if (isAfter(ns, viewEnd) || isBefore(ne, displayStart)) return null
+          const cs = isBefore(ns, displayStart) ? displayStart : ns
+          const ce = isAfter(ne, viewEnd)        ? viewEnd      : ne
+          return {
+            left:  differenceInDays(cs, displayStart) * cw,
+            width: Math.max((differenceInDays(ce, cs) + 1) * cw, cw / 2),
+            isDragging: true,
+          }
+        }
+      }
+    }
     if (!task.start_date || !task.end_date) return null
     const start = parseISO(task.start_date)
     const end   = parseISO(task.end_date)
     if (!isValid(start) || !isValid(end)) return null
-    if (isAfter(start, viewEnd) || isBefore(end, viewStart)) return null
-    const cs = isBefore(start, viewStart) ? viewStart : start
-    const ce = isAfter(end, viewEnd)      ? viewEnd   : end
+    if (isAfter(start, viewEnd) || isBefore(end, displayStart)) return null
+    const cs = isBefore(start, displayStart) ? displayStart : start
+    const ce = isAfter(end, viewEnd)         ? viewEnd      : end
     return {
-      left:  differenceInDays(cs, viewStart) * cw,
+      left:  differenceInDays(cs, displayStart) * cw,
       width: Math.max((differenceInDays(ce, cs) + 1) * cw, cw / 2),
       isDragging: false,
     }
@@ -269,9 +349,9 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
 
   const navigate = (delta) => setViewStart(d => addDays(d, delta))
   const goToday = () => {
-    const d = new Date(today.getFullYear(), today.getMonth(), 1)
-    d.setDate(d.getDate() - 7)
-    setViewStart(d)
+    setViewStart(addDays(today, -9))
+    setExtraLeft(0)
+    if (scrollContainerRef.current) scrollContainerRef.current.scrollLeft = 0
   }
 
   const renderCellBg = () =>
@@ -463,7 +543,7 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
                     ? '6px 6px 16px var(--nm-dark), -2px -2px 8px var(--nm-light)'
                     : '3px 3px 6px var(--nm-dark), -1px -1px 4px var(--nm-light)',
                   opacity: task.status === 'done' ? 0.75 : 0.85,
-                  cursor: isDraggingThis ? 'grabbing' : 'grab',
+                  cursor: isDraggingThis ? 'grabbing' : 'pointer',
                   transform: isDraggingThis ? 'scaleY(1.12)' : 'scaleY(1)',
                   transition: isDraggingThis ? 'none' : 'box-shadow 0.15s ease, transform 0.15s ease',
                   zIndex: isDraggingThis ? 20 : 1,
@@ -742,11 +822,11 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
     let summaryBar = null
     if (isCollapsed) {
       const range = getProjectDateRange(dated)
-      if (range && !isAfter(range.start, viewEnd) && !isBefore(range.end, viewStart)) {
-        const cs = isBefore(range.start, viewStart) ? viewStart : range.start
-        const ce = isAfter(range.end, viewEnd)       ? viewEnd   : range.end
+      if (range && !isAfter(range.start, viewEnd) && !isBefore(range.end, displayStart)) {
+        const cs = isBefore(range.start, displayStart) ? displayStart : range.start
+        const ce = isAfter(range.end, viewEnd)          ? viewEnd      : range.end
         summaryBar = {
-          left:  differenceInDays(cs, viewStart) * cw,
+          left:  differenceInDays(cs, displayStart) * cw,
           width: Math.max((differenceInDays(ce, cs) + 1) * cw, cw / 2),
         }
       }
@@ -901,8 +981,8 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
 
         <div className="ml-auto flex items-center gap-2">
           {[['todo', '未着手'], ['in_progress', '進行中'], ['done', '完了']].map(([key, label]) => {
-            const isActive = statusFilter === key
-            const isDimmed = statusFilter !== null && !isActive
+            const isActive = statusFilter.has(key)
+            const isDimmed = statusFilter.size > 0 && !isActive
             return (
               <button
                 key={key}
@@ -913,7 +993,7 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
                   opacity: isDimmed ? 0.4 : 1,
                   transition: 'opacity 0.15s',
                 }}
-                title={isActive ? 'フィルターを解除' : `${label}のみ表示`}
+                title={isActive ? 'フィルターを解除' : `${label}を絞り込む`}
               >
                 <span style={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: STATUS_COLOR[key], display: 'inline-block', flexShrink: 0 }} />
                 <span className="text-xs font-medium" style={{ color: isActive ? STATUS_COLOR[key] : 'var(--nm-muted)' }}>{label}</span>
@@ -971,7 +1051,23 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
           <p className="text-sm">タスクがありません</p>
         </div>
       ) : (
-        <div className="overflow-auto" style={{ flex: 1, minHeight: 0 }}>
+        <div
+          ref={scrollContainerRef}
+          className="overflow-auto"
+          style={{ flex: 1, minHeight: 0, cursor: 'grab' }}
+          onMouseDown={(e) => {
+            if (e.button !== 0) return
+            if (dragInfo.current) return
+            if (e.target.closest('button, input, select')) return
+            panInfo.current = {
+              startX: e.clientX,
+              startY: e.clientY,
+              prevX: e.clientX,
+              prevY: e.clientY,
+              active: false,
+            }
+          }}
+        >
           <div style={{ minWidth: lw + gridWidth }}>
             {renderDateHeader()}
             {groupByProject && projectGroups ? (

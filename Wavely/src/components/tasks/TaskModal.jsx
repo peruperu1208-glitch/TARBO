@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 function toDateStr(date) {
   return date.toISOString().slice(0, 10)
@@ -22,6 +22,16 @@ export default function TaskModal({ task, tasks = [], projects, defaultProjectId
     comment: '',
   })
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const titleRef = useRef(null)
+  const commentRef = useRef(null)
+
+  useEffect(() => {
+    if (task) {
+      commentRef.current?.focus()
+    } else {
+      titleRef.current?.focus()
+    }
+  }, [])
 
   useEffect(() => {
     if (task) {
@@ -115,6 +125,7 @@ export default function TaskModal({ task, tasks = [], projects, defaultProjectId
               タイトル *
             </label>
             <input
+              ref={titleRef}
               type="text"
               value={form.title}
               onChange={set('title')}
@@ -238,6 +249,7 @@ export default function TaskModal({ task, tasks = [], projects, defaultProjectId
               コメント
             </label>
             <textarea
+              ref={commentRef}
               value={form.comment}
               onChange={set('comment')}
               rows={4}
