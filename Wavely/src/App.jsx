@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { differenceInDays, addDays, parseISO, format } from 'date-fns'
 import Sidebar from './components/Sidebar'
 import Header from './components/Header'
@@ -11,6 +11,12 @@ import SplashScreen from './components/SplashScreen'
 
 export default function App() {
   const [showSplash, setShowSplash] = useState(true)
+  const [startupPercent, setStartupPercent] = useState(2)
+  const [startupLabel, setStartupLabel] = useState('起動中...')
+  const [startupStepId, setStartupStepId] = useState('')
+  const [startupComplete, setStartupComplete] = useState(false)
+  const dataReadyRef = useRef(false)
+
   const [projects, setProjects] = useState([])
   const [archivedProjects, setArchivedProjects] = useState([])
   const [tasks, setTasks] = useState([])
@@ -44,8 +50,57 @@ export default function App() {
     setTasks(data)
   }, [selectedProjectId, showArchived])
 
-  useEffect(() => { loadProjects() }, [loadProjects])
-  useEffect(() => { loadTasks() }, [loadTasks])
+  // 起動進捗ハンドリング（初回のみ）
+  useEffect(() => {
+    const STEP_PERCENT = { wasm: 20, db: 55, schema: 72 }
+    let initDone = false
+
+    const runInitData = async () => {
+      if (initDone) return
+      initDone = true
+
+      setStartupStepId('data')
+      setStartupPercent(82)
+      setStartupLabel('プロジェクトを取得中...')
+      const [data, archived] = await Promise.all([
+        window.electronAPI.getProjects(),
+        window.electronAPI.getArchivedProjects(),
+      ])
+      setProjects(data)
+      setArchivedProjects(archived)
+
+      setStartupPercent(92)
+      setStartupLabel('タスクを取得中...')
+      const tasksData = await window.electronAPI.getTasks(null, false)
+      setTasks(tasksData)
+
+      dataReadyRef.current = true
+      setStartupPercent(100)
+      setStartupLabel('起動完了')
+      setStartupComplete(true)
+    }
+
+    const handleStep = ({ id, label }) => {
+      if (STEP_PERCENT[id] !== undefined) { setStartupPercent(STEP_PERCENT[id]); setStartupStepId(id) }
+      if (label) setStartupLabel(label + '...')
+      if (id === 'ready') runInitData()
+    }
+
+    // 起動中に送られた進捗を追いかける（ウィンドウ表示より先にステップが進んでいた場合）
+    window.electronAPI.getStartupState().then(({ steps, ready }) => {
+      const last = [...steps].filter(s => STEP_PERCENT[s.id] !== undefined).pop()
+      if (last) { setStartupPercent(STEP_PERCENT[last.id]); setStartupLabel(last.label + '...') }
+      if (ready) runInitData()
+    })
+
+    window.electronAPI.onStartupProgress(handleStep)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // selectedProjectId / showArchived 変更時のタスク再取得（初回ロード後のみ）
+  useEffect(() => {
+    if (!dataReadyRef.current) return
+    loadTasks()
+  }, [loadTasks])
 
   const handleCreateTask = async (taskData) => {
     const projectId = taskData.project_id || selectedProjectId || projects[0]?.id
@@ -369,7 +424,14 @@ export default function App() {
         />
       )}
 
-      {showSplash && <SplashScreen onDone={() => setShowSplash(false)} />}
+      {showSplash && (
+        <SplashScreen
+          percent={startupPercent}
+          label={startupLabel}
+          done={startupComplete}
+          onDone={() => setShowSplash(false)}
+        />
+      )}
     </div>
   )
 }

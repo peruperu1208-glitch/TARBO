@@ -6,6 +6,19 @@ const initSqlJs = require('sql.js')
 const isDev = !app.isPackaged
 let db
 let dbPath
+let mainWin = null
+
+// ---- 起動進捗 ----
+
+const startupLog = []
+let startupReady = false
+
+function recordStep(id, label) {
+  startupLog.push({ id, label })
+  if (mainWin && !mainWin.isDestroyed()) {
+    try { mainWin.webContents.send('startup-progress', { id, label }) } catch (_) {}
+  }
+}
 
 // ---- Config (DB保存先など永続設定) ----
 
@@ -62,10 +75,11 @@ function lastId() {
 // ---- Database initialization ----
 
 async function initDatabase() {
+  recordStep('wasm', 'データベースエンジンを準備中')
   const SQL = await initSqlJs()
-  const defaultDbPath = path.join(app.getPath('userData'), 'turbo.db')
 
-  // カスタム保存先が設定済みでファイルが存在する場合はそちらを使用
+  recordStep('db', 'データベースを開いています')
+  const defaultDbPath = path.join(app.getPath('userData'), 'turbo.db')
   dbPath = (config.dbPath && fs.existsSync(config.dbPath)) ? config.dbPath : defaultDbPath
 
   if (fs.existsSync(dbPath)) {
@@ -73,8 +87,9 @@ async function initDatabase() {
   } else {
     db = new SQL.Database()
   }
-
   db.run('PRAGMA foreign_keys = ON')
+
+  recordStep('schema', 'スキーマを確認中')
 
   db.run(`CREATE TABLE IF NOT EXISTS projects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -255,15 +270,11 @@ function setupIpcHandlers() {
     const newDbPath = path.join(result.filePaths[0], 'turbo.db')
     if (newDbPath === dbPath) return dbPath
 
-    // 現在のDBデータを新しい場所に書き出し
     const oldDbPath = dbPath
     const data = db.export()
     fs.writeFileSync(newDbPath, Buffer.from(data))
-
-    // 元ファイルを削除（移動扱い）
     try { fs.unlinkSync(oldDbPath) } catch (_) {}
 
-    // dbPath を更新して config に保存
     dbPath = newDbPath
     config.dbPath = newDbPath
     saveConfig()
@@ -275,7 +286,7 @@ function setupIpcHandlers() {
 // ---- Window ----
 
 function createWindow() {
-  const win = new BrowserWindow({
+  mainWin = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 960,
@@ -289,12 +300,12 @@ function createWindow() {
     show: false,
   })
 
-  win.once('ready-to-show', () => win.show())
+  mainWin.once('ready-to-show', () => mainWin.show())
 
   if (isDev) {
-    win.loadURL('http://localhost:5173')
+    mainWin.loadURL('http://localhost:5173')
   } else {
-    win.loadFile(path.join(__dirname, '../dist/index.html'))
+    mainWin.loadFile(path.join(__dirname, '../dist/index.html'))
   }
 }
 
@@ -303,9 +314,24 @@ function createWindow() {
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
   loadConfig()
-  await initDatabase()
-  setupIpcHandlers()
+
+  // レンダラーが起動ログを追いかけられるよう、ウィンドウより先に登録
+  ipcMain.handle('get-startup-state', () => ({
+    steps: startupLog,
+    ready: startupReady,
+  }))
+
+  // ウィンドウをすぐに表示してローディング画面を見せる
   createWindow()
+
+  // DB 初期化（各フェーズで進捗を送信）
+  await initDatabase()
+
+  // データハンドラーをDB初期化後に登録
+  setupIpcHandlers()
+
+  startupReady = true
+  recordStep('ready', '起動完了')
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

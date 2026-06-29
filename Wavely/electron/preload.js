@@ -20,4 +20,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   getDbPath: () => ipcRenderer.invoke('get-db-path'),
   chooseDbFolder: () => ipcRenderer.invoke('choose-db-folder'),
+
+  getStartupState: () => ipcRenderer.invoke('get-startup-state'),
+  onStartupProgress: (callback) => ipcRenderer.on('startup-progress', (_, data) => callback(data)),
 })

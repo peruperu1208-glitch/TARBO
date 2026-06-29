@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useLayoutEffect } from 'react'
 import {
-  format, addDays, eachDayOfInterval,
+  format, addDays, eachDayOfInterval, startOfDay,
   differenceInDays, parseISO, isValid, isBefore, isAfter,
 } from 'date-fns'
 import { ja } from 'date-fns/locale'
@@ -17,7 +17,7 @@ const STATUS_COLOR = {
 }
 
 export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onDatesChange, onNewTask, onSubtaskCreate, onReorderTasks, groupByProject = false }) {
-  const today = useMemo(() => new Date(), [])
+  const today = useMemo(() => startOfDay(new Date()), [])
 
   const [viewStart, setViewStart] = useState(() => addDays(today, -9))
   const [extraLeft, setExtraLeft] = useState(0)
@@ -139,11 +139,18 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
   const [rowDragOverId, setRowDragOverId] = useState(null)
   const [rowInsertAbove, setRowInsertAbove] = useState(true)
   const [statusFilter, setStatusFilter] = useState(new Set())
+  const [todayFilter, setTodayFilter] = useState(false)
 
-  const filteredTasks = useMemo(
-    () => statusFilter.size > 0 ? tasks.filter(t => statusFilter.has(t.status)) : tasks,
-    [tasks, statusFilter]
-  )
+  const filteredTasks = useMemo(() => {
+    let result = tasks
+    if (todayFilter) {
+      result = result.filter(t => t.start_date && t.end_date && t.start_date <= todayStr && t.end_date >= todayStr)
+    }
+    if (statusFilter.size > 0) {
+      result = result.filter(t => statusFilter.has(t.status))
+    }
+    return result
+  }, [tasks, statusFilter, todayFilter, todayStr])
 
   const toggleStatusFilter = (key) => setStatusFilter(prev => {
     const next = new Set(prev)
@@ -980,6 +987,23 @@ export default function GanttChart({ tasks, allTasks = [], projects, onEdit, onD
         </span>
 
         <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={() => setTodayFilter(v => !v)}
+            className={`flex items-center gap-1.5 px-2.5 py-1 ${todayFilter ? 'nm-pressed-xs' : 'nm-btn'}`}
+            style={{ borderRadius: 8 }}
+            title={todayFilter ? '今日フィルターを解除' : '今日が期間内のタスクのみ表示'}
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" style={{ color: todayFilter ? 'var(--nm-accent)' : 'var(--nm-muted)', flexShrink: 0 }}>
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+              <line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" />
+              <line x1="3" y1="10" x2="21" y2="10" />
+              <circle cx="12" cy="16" r="2" fill="currentColor" stroke="none" />
+            </svg>
+            <span className="text-xs font-medium" style={{ color: todayFilter ? 'var(--nm-accent)' : 'var(--nm-muted)' }}>今日</span>
+          </button>
+
+          <Divider />
+
           {[['todo', '未着手'], ['in_progress', '進行中'], ['done', '完了']].map(([key, label]) => {
             const isActive = statusFilter.has(key)
             const isDimmed = statusFilter.size > 0 && !isActive
